@@ -2,7 +2,7 @@ package raft
 
 // LogEntry represents one particular log entry in the raft
 type LogEntry struct {
-	Index, Term int64
+	Index, Term uint64
 	Data        []byte
 }
 
@@ -10,10 +10,11 @@ type LogEntry struct {
 // a store for storing logs of one raft server. LogStore is responsible
 // for guaranteeing persistence of logs across server restarts.
 type LogStore interface {
+	Init() error
 	// Store should overwrite the log entry if it already exists (at that index).
 	Store(entry LogEntry) error
-	Get(index int64) (*LogEntry, error)
-	Length() (int64, error)
+	Get(index uint64) (*LogEntry, error)
+	Length() (uint64, error)
 }
 
 // PersistentStore implementations can be used as general-purpose stores
