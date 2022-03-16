@@ -28,14 +28,19 @@ type FSM interface {
 	Apply(entry LogEntry) (interface{}, error)
 }
 
-// Peer represents connection between 2 raft peers.
-// This object manages RPC lifecycle between the 2 peers.
-type Peer interface {
-	RequestVote(args *RequestVoteRPC) (*RequestVoteRPCResult, error)
-	AppendEntries(args *AppendEntriesRPC) (*AppendEntriesRPCResult, error)
+// RPCServer is the interface exposed by a Raft server
+// to outside (including other Raft servers, and clients)
+type RPCServer interface {
+	ClientRequest(args *ClientRequestRPC, result *ClientRequestRPCResult) error
+	RequestVote(args *RequestVoteRPC, result *RequestVoteRPCResult) error
+	AppendEntries(args *AppendEntriesRPC, result *AppendEntriesRPCResult) error
 }
 
-// PeerConnManager can be used to instantiate Peer objects
-type PeerConnManager interface {
-	ConnectToPeer(address ServerAddress) (Peer, error)
+// RPCManager abstracts away RPC handling from RPC servers
+type RPCManager interface {
+	// Start is a blocking call.
+	// It starts the RPC server at the given address and blocks forever.
+	// Start only returns error if it fails to start the server.
+	Start(address ServerAddress, server RPCServer) error
+	ConnectToPeer(address ServerAddress) (RPCServer, error)
 }
