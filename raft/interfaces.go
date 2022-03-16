@@ -25,7 +25,7 @@ type PersistentStore interface {
 
 // FSM represents a general finite-state machine which has only a single operation -- Apply.
 type FSM interface {
-	Apply(entry LogEntry) (interface{}, error)
+	Apply(entry LogEntry) ([]byte, error)
 }
 
 // Peer represents connection between 2 raft peers.

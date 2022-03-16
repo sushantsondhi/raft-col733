@@ -1,8 +1,22 @@
 package kvstore
 
 import (
+	"encoding/json"
+	"fmt"
 	"github.com/sushantsondhi/raft-col733/raft"
 )
+
+type RequestType int
+
+const (
+	Get RequestType = iota
+	Set
+)
+
+type Request struct {
+	Type     RequestType
+	Key, Val string
+}
 
 // KeyValFSM is the implementation of the raft.FSM interface
 // for the key-value store. We store the key value pairs
@@ -14,7 +28,28 @@ type KeyValFSM struct {
 
 var _ raft.FSM = &KeyValFSM{}
 
-func (fsm *KeyValFSM) Apply(entry raft.LogEntry) (interface{}, error) {
-	//TODO implement me
-	panic("implement me")
+func NewKeyValFSM() *KeyValFSM {
+	return &KeyValFSM{
+		store: make(map[string]string),
+	}
+}
+
+func (fsm *KeyValFSM) Apply(entry raft.LogEntry) ([]byte, error) {
+	var request Request
+	if err := json.Unmarshal(entry.Data, &request); err != nil {
+		return nil, err
+	}
+	switch request.Type {
+	case Get:
+		if val, ok := fsm.store[request.Key]; ok {
+			return []byte(val), nil
+		} else {
+			return nil, fmt.Errorf("key does not exist")
+		}
+	case Set:
+		fsm.store[request.Key] = request.Val
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("invalid request type")
+	}
 }
