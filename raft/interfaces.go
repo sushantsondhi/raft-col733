@@ -10,7 +10,6 @@ type LogEntry struct {
 // a store for storing logs of one raft server. LogStore is responsible
 // for guaranteeing persistence of logs across server restarts.
 type LogStore interface {
-	Init() error
 	// Store should overwrite the log entry if it already exists (at that index).
 	Store(entry LogEntry) error
 	Get(index uint64) (*LogEntry, error)
