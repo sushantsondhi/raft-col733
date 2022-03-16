@@ -5,29 +5,26 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"github.com/sushantsondhi/raft-col733/raft"
-	"log"
 )
 
-func EncodeToBytes(p interface{}) []byte {
+func EncodeToBytes(p interface{}) ([]byte, error) {
 
 	buf := bytes.Buffer{}
 	enc := gob.NewEncoder(&buf)
 	err := enc.Encode(p)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	return buf.Bytes()
+	return buf.Bytes(), nil
 }
 
-func DecodeToLogEntry(s []byte) raft.LogEntry {
+func DecodeToLogEntry(s []byte) (raft.LogEntry, error) {
 	entry := raft.LogEntry{}
 	dec := gob.NewDecoder(bytes.NewReader(s))
 	err := dec.Decode(&entry)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return entry
+
+	return entry, err
 }
 
 func bytesToUint64(b []byte) uint64 {

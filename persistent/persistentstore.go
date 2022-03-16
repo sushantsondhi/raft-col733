@@ -1,28 +1,61 @@
 package persistent
 
 import (
-	"database/sql"
+	"errors"
+	"github.com/boltdb/bolt"
 	"github.com/sushantsondhi/raft-col733/raft"
 )
 
+var stateBucketName = []byte("state")
+
 type PStore struct {
-	db *sql.DB
+	db *bolt.DB
 }
 
 var _ raft.PersistentStore = PStore{}
 
-func NewPStore(db *sql.DB) PStore {
+func NewPStore(dataBaseFilePath string) (PStore, error) {
+	db, err := bolt.Open(dataBaseFilePath, 0600, nil)
+
+	if err != nil {
+		return PStore{}, err
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(stateBucketName)
+		return err
+	})
+
+	if err != nil {
+		return PStore{}, err
+	}
+
 	return PStore{
 		db: db,
-	}
+	}, err
 }
 
 func (store PStore) Set(key, value []byte) error {
-	//TODO implement me
-	panic("implement me")
+
+	return store.db.Update(func(tx *bolt.Tx) error {
+
+		bucket := tx.Bucket(stateBucketName)
+		return bucket.Put(key, value)
+
+	})
 }
 
 func (store PStore) Get(key []byte) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
+
+	var val []byte
+	err := store.db.View(func(tx *bolt.Tx) error {
+
+		bucket := tx.Bucket(stateBucketName)
+		val = bucket.Get(key)
+		if val == nil {
+			return errors.New("[Get]: index doesn't exist")
+		}
+		return nil
+	})
+	return val, err
 }
