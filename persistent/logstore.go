@@ -1,34 +1,95 @@
 package persistent
 
+// Bolt is a pure Go key/value store  that don't require a full database server such as Postgres or MySQL
 import (
-	"database/sql"
+	"errors"
+	"github.com/boltdb/bolt"
 	"github.com/sushantsondhi/raft-col733/raft"
 )
 
-// DbLogStore is a log store implementation backed by a SQL DB
+var logsBucketName = []byte("logs")
+
+// DbLogStore is a log store implementation backed by a Bolt DB
 type DbLogStore struct {
-	db *sql.DB
+	db *bolt.DB
 }
 
 var _ raft.LogStore = DbLogStore{}
 
-func NewDbLogStore(db *sql.DB) DbLogStore {
+func CreateDbLogStore(dataBaseFilePath string) (DbLogStore, error) {
+	// Open the .db data file in your current directory.
+	// It will be created if it doesn't exist.
+	db, err := bolt.Open(dataBaseFilePath, 0600, nil)
+
+	if err != nil {
+		return DbLogStore{}, err
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(logsBucketName)
+		return err
+	})
+
+	if err != nil {
+		return DbLogStore{}, err
+	}
+
 	return DbLogStore{
 		db: db,
-	}
+	}, err
+
 }
 
 func (d DbLogStore) Store(entry raft.LogEntry) error {
-	//TODO implement me
-	panic("implement me")
+
+	return d.db.Update(func(tx *bolt.Tx) error {
+
+		logLength := uint64(tx.Bucket(logsBucketName).Stats().KeyN)
+		if entry.Index > logLength {
+			return errors.New("[Store]: can't append to index; greater than log length")
+		}
+
+		key := uint64ToBytes(entry.Index)
+		val, err := EncodeToBytes(entry)
+		if err != nil {
+			return err
+		}
+		bucket := tx.Bucket(logsBucketName)
+		return bucket.Put(key, val)
+
+	})
+
 }
 
-func (d DbLogStore) Get(index int64) (*raft.LogEntry, error) {
-	//TODO implement me
-	panic("implement me")
+func (d DbLogStore) Get(index uint64) (*raft.LogEntry, error) {
+
+	var entry raft.LogEntry
+
+	err := d.db.View(func(tx *bolt.Tx) error {
+
+		bucket := tx.Bucket(logsBucketName)
+		val := bucket.Get(uint64ToBytes(index))
+
+		if val == nil {
+			return errors.New("[Get]: index doesn't exist")
+		}
+		var err error
+		entry, err = DecodeToLogEntry(val)
+		return err
+	})
+
+	return &entry, err
+
 }
 
-func (d DbLogStore) Length() (int64, error) {
-	//TODO implement me
-	panic("implement me")
+func (d DbLogStore) Length() (uint64, error) {
+
+	var logLength uint64
+	err := d.db.View(func(tx *bolt.Tx) error {
+		logLength = uint64(tx.Bucket(logsBucketName).Stats().KeyN)
+		return nil
+	})
+
+	return logLength, err
+
 }
