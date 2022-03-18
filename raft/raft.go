@@ -1,7 +1,9 @@
 package raft
 
 type RaftServer struct {
-	// TODO: fill in these fields as we go along
+	state
+	LogStore        LogStore
+	PersistentStore PersistentStore
 }
 
 func NewRaftServer(
