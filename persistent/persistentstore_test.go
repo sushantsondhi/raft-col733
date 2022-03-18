@@ -73,7 +73,7 @@ func TestPStore_Get(t *testing.T) {
 
 	val, err = store.Get([]byte("key2"))
 
-	if err != nil {
+	if err == nil {
 		t.Error("got value for invalid key", err)
 	}
 
