@@ -59,3 +59,18 @@ func (store PStore) Get(key []byte) ([]byte, error) {
 	})
 	return val, err
 }
+
+func (store PStore) GetDefault(key []byte, defaultVal []byte) ([]byte, error) {
+	var val []byte
+	err := store.db.Update(func(tx *bolt.Tx) error {
+
+		bucket := tx.Bucket(stateBucketName)
+		val = bucket.Get(key)
+		if val == nil {
+			val = defaultVal
+			return bucket.Put(key, defaultVal)
+		}
+		return nil
+	})
+	return val, err
+}

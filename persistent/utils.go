@@ -27,12 +27,12 @@ func DecodeToLogEntry(s []byte) (raft.LogEntry, error) {
 	return entry, err
 }
 
-func bytesToUint64(b []byte) uint64 {
-	return binary.BigEndian.Uint64(b)
+func bytesToInt64(b []byte) int64 {
+	return int64(binary.LittleEndian.Uint64(b))
 }
 
-func uint64ToBytes(u uint64) []byte {
+func int64ToBytes(i int64) []byte {
 	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, u)
+	binary.LittleEndian.PutUint64(buf, uint64(i))
 	return buf
 }

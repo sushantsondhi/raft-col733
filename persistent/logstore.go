@@ -44,12 +44,12 @@ func (d DbLogStore) Store(entry raft.LogEntry) error {
 
 	return d.db.Update(func(tx *bolt.Tx) error {
 
-		logLength := uint64(tx.Bucket(logsBucketName).Stats().KeyN)
+		logLength := int64(tx.Bucket(logsBucketName).Stats().KeyN)
 		if entry.Index > logLength {
 			return errors.New("[Store]: can't append to index; greater than log length")
 		}
 
-		key := uint64ToBytes(entry.Index)
+		key := int64ToBytes(entry.Index)
 		val, err := EncodeToBytes(entry)
 		if err != nil {
 			return err
@@ -61,14 +61,14 @@ func (d DbLogStore) Store(entry raft.LogEntry) error {
 
 }
 
-func (d DbLogStore) Get(index uint64) (*raft.LogEntry, error) {
+func (d DbLogStore) Get(index int64) (*raft.LogEntry, error) {
 
 	var entry raft.LogEntry
 
 	err := d.db.View(func(tx *bolt.Tx) error {
 
 		bucket := tx.Bucket(logsBucketName)
-		val := bucket.Get(uint64ToBytes(index))
+		val := bucket.Get(int64ToBytes(index))
 
 		if val == nil {
 			return errors.New("[Get]: index doesn't exist")
@@ -82,11 +82,11 @@ func (d DbLogStore) Get(index uint64) (*raft.LogEntry, error) {
 
 }
 
-func (d DbLogStore) Length() (uint64, error) {
+func (d DbLogStore) Length() (int64, error) {
 
-	var logLength uint64
+	var logLength int64
 	err := d.db.View(func(tx *bolt.Tx) error {
-		logLength = uint64(tx.Bucket(logsBucketName).Stats().KeyN)
+		logLength = int64(tx.Bucket(logsBucketName).Stats().KeyN)
 		return nil
 	})
 
