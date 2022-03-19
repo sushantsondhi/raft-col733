@@ -1,5 +1,7 @@
 package raft
 
+import "github.com/google/uuid"
+
 type RaftServer struct {
 	state
 	LogStore        LogStore
@@ -13,8 +15,20 @@ func NewRaftServer(
 	persistentStore PersistentStore,
 	manager RPCManager,
 ) *RaftServer {
-	// TODO: lots of TODO
-	return &RaftServer{}
+	newRaftServer := &RaftServer{
+		state: state{
+			Term:          getTerm(persistentStore),
+			VotedFor:      getVotedFor(persistentStore),
+			CommitIndex:   getCommitIndex(persistentStore),
+			State:         Candidate,
+			AppliedIndex:  -1,
+			NextIndexMap:  make(map[uuid.UUID]int64),
+			MatchIndexMap: make(map[uuid.UUID]int64),
+		},
+		LogStore:        logStore,
+		PersistentStore: persistentStore,
+	}
+	return newRaftServer
 }
 
 func (server *RaftServer) ClientRequest(args *ClientRequestRPC, result *ClientRequestRPCResult) error {
