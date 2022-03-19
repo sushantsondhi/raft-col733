@@ -4,10 +4,16 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/multierr"
 	"log"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
 )
+
+type ApplyMsg struct {
+	Err   error
+	Bytes []byte
+}
 
 type RaftServer struct {
 	// Access to state must be synchronized between multiple goroutines
@@ -26,6 +32,7 @@ type RaftServer struct {
 	Mutex                sync.Mutex
 	ElectionTimeoutChan  chan bool
 	HeartbeatTimeoutChan chan bool
+	ApplyCh              map[int64]chan ApplyMsg
 }
 
 func NewRaftServer(
@@ -48,13 +55,14 @@ func (server *RaftServer) ClientRequest(args *ClientRequestRPC, result *ClientRe
 func (server *RaftServer) RequestVote(args *RequestVoteRPC, result *RequestVoteRPCResult) error {
 	server.Mutex.Lock()
 	defer server.Mutex.Unlock()
-	if result.Term > server.Term {
+	if args.Term > server.Term {
 		// Update term and convert to follower
 		// TODO: make this persistent after Sushant's PR
-		server.Term = result.Term
+		server.Term = args.Term
+		server.VotedFor = nil
 		server.convertToFollower()
 	}
-	result.Term = args.Term
+	result.Term = server.Term
 	// Return false if term < currentTerm (Section 5.1)
 	if args.Term < server.Term {
 		result.VoteGranted = false
@@ -117,6 +125,7 @@ func (server *RaftServer) convertToCandidate() {
 	server.State = Candidate
 	server.CurrentLeader = nil
 	// TODO: make this persistent after sushant's PR
+	// TODO: this should be in a transaction
 	server.Term++
 	server.VotedFor = &server.MyID
 
@@ -149,7 +158,9 @@ func (server *RaftServer) convertToCandidate() {
 				server.Mutex.Lock()
 				defer server.Mutex.Unlock()
 				if server.Term < response.Term {
+					// TODO: make persistent
 					server.Term = response.Term
+					server.VotedFor = nil
 					server.convertToFollower()
 				}
 				voteCh <- response.VoteGranted
@@ -203,15 +214,17 @@ func (server *RaftServer) convertToLeader(term int64) {
 		// Note: the paper specifies to set it to lastLogEntry.Index + 1, but we set to lastLogEntry.Index.
 		// Why? Because if set to lastLogEntry.Index + 1, the followers will never be updated in the event
 		// that no more new requests come from client.
+		// TODO: change this logic
 		if lastLogEntry != nil {
 			server.NextIndexMap[serverID] = lastLogEntry.Index
 		} else {
 			server.NextIndexMap[serverID] = 0
 		}
 		// At the same time we assume, most pessimistically, that we don't know if the other servers have even a single log entry
+		// TODO change this
 		server.MatchIndexMap[serverID] = -1
 	}
-	// TODO: asynchronously broadcast append entries
+	server.broadcastAppendEntries()
 }
 
 // broadcastAppendEntries sends append entry RPCs to all servers and waits for their response.
@@ -232,8 +245,9 @@ func (server *RaftServer) broadcastAppendEntries() {
 				Term:              server.Term,
 				Leader:            server.MyID,
 				LeaderCommitIndex: server.CommitIndex,
-				PrevLogIndex:      -1,
-				PrevLogTerm:       -1,
+				// TODO
+				PrevLogIndex: -1,
+				PrevLogTerm:  -1,
 			}
 			server.Mutex.Unlock()
 			logEntry, err := server.LogStore.Get(uint64(indexToSend))
@@ -262,6 +276,12 @@ func (server *RaftServer) broadcastAppendEntries() {
 			if response.Term != server.Term {
 				// Either the peer was on a higher term, or our term number changed concurrently
 				// In either case the request is invalid and must be discarded
+				if response.Term > server.Term {
+					// TODO: persistent
+					server.Term = response.Term
+					server.VotedFor = nil
+					server.convertToFollower()
+				}
 				return
 			}
 			if response.Success {
@@ -302,6 +322,25 @@ func (server *RaftServer) commitEntries() {
 		// TODO: persist this after sushant's PR
 		server.CommitIndex = matchIndexes[n/2]
 	}
+
+	for server.AppliedIndex < server.CommitIndex {
+		logEntry, err := server.LogStore.Get(uint64(server.AppliedIndex + 1))
+		if err != nil {
+			log.Printf("error getting log entry from log store: %+v\n", err)
+			break
+		}
+		bytes, err := server.FSM.Apply(*logEntry)
+		if err != nil {
+			log.Printf("error applying log entry to FSM: :%+v\n", err)
+		}
+		if ch, ok := server.ApplyCh[server.AppliedIndex]; ok {
+			ch <- ApplyMsg{
+				Err:   err,
+				Bytes: bytes,
+			}
+		}
+		server.AppliedIndex++
+	}
 }
 
 // electionTimeoutController should run in a separate goroutine and is
@@ -311,7 +350,10 @@ func (server *RaftServer) commitEntries() {
 // to the channel simply resets the timer. Whenever a timeout occurs it
 // initiates conversion to Candidate.
 func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
-	ticker := time.NewTicker(timeout)
+	timeoutRandomizer := func(timeout time.Duration) time.Duration {
+		return timeout + time.Duration(rand.Float64()*float64(timeout))
+	}
+	ticker := time.NewTicker(timeoutRandomizer(timeout))
 	ticker.Stop()
 	select {
 	case <-ticker.C:
@@ -319,10 +361,10 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 		server.Mutex.Lock()
 		server.convertToCandidate()
 		server.Mutex.Unlock()
-		ticker.Reset(timeout)
+		ticker.Reset(timeoutRandomizer(timeout))
 	case reset := <-server.ElectionTimeoutChan:
 		if reset == true {
-			ticker.Reset(timeout)
+			ticker.Reset(timeoutRandomizer(timeout))
 		} else {
 			ticker.Stop()
 		}
@@ -340,7 +382,7 @@ func (server *RaftServer) heartBeatTimeoutController(timeout time.Duration) {
 	select {
 	case <-ticker.C:
 		ticker.Stop()
-		// TODO: Asynchronously broadcast empty append entries
+		server.broadcastAppendEntries()
 		ticker.Reset(timeout)
 	case reset := <-server.ElectionTimeoutChan:
 		if reset == true {
