@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/raft"
 	"net"
 	"net/rpc"
@@ -28,6 +29,6 @@ func (manager *Manager) Start(address raft.ServerAddress, server raft.RPCServer)
 	}
 }
 
-func (manager *Manager) ConnectToPeer(address raft.ServerAddress) (raft.RPCServer, error) {
-	return NewPeer(address), nil
+func (manager *Manager) ConnectToPeer(address raft.ServerAddress, id uuid.UUID) (raft.RPCServer, error) {
+	return NewPeer(address, id), nil
 }

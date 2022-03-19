@@ -1,8 +1,10 @@
 package raft
 
+import "github.com/google/uuid"
+
 // LogEntry represents one particular log entry in the raft
 type LogEntry struct {
-	Index, Term uint64
+	Index, Term int64
 	Data        []byte
 }
 
@@ -31,6 +33,7 @@ type FSM interface {
 // RPCServer is the interface exposed by a Raft server
 // to outside (including other Raft servers, and clients)
 type RPCServer interface {
+	GetID() uuid.UUID
 	ClientRequest(args *ClientRequestRPC, result *ClientRequestRPCResult) error
 	RequestVote(args *RequestVoteRPC, result *RequestVoteRPCResult) error
 	AppendEntries(args *AppendEntriesRPC, result *AppendEntriesRPCResult) error

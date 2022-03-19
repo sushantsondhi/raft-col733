@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/raft"
 	"io"
 	"net/rpc"
@@ -10,6 +11,7 @@ import (
 // Peer is the implementation of raft.RPCServer interface using the
 // golang's net/rpc package
 type Peer struct {
+	id      uuid.UUID
 	address raft.ServerAddress
 	client  *rpc.Client
 }
@@ -17,8 +19,9 @@ type Peer struct {
 // NewPeer creates a Peer instance with lazy initialization.
 // Actual RPC connection is not established until an actual RPC
 // call takes place.
-func NewPeer(address raft.ServerAddress) *Peer {
+func NewPeer(address raft.ServerAddress, id uuid.UUID) *Peer {
 	return &Peer{
+		id:      id,
 		address: address,
 	}
 }
@@ -43,6 +46,10 @@ func (peer *Peer) call(method string, args interface{}, result interface{}) (err
 		break
 	}
 	return
+}
+
+func (peer *Peer) GetID() uuid.UUID {
+	return peer.id
 }
 
 func (peer *Peer) ClientRequest(args *raft.ClientRequestRPC, result *raft.ClientRequestRPCResult) error {
