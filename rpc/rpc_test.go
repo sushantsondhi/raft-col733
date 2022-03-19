@@ -2,6 +2,7 @@ package rpc_test
 
 import (
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/sushantsondhi/raft-col733/common"
 	"github.com/sushantsondhi/raft-col733/rpc"
@@ -12,6 +13,10 @@ import (
 
 // TestRaft is a mock implementation of raft server for testing purposes
 type TestRaft struct{}
+
+func (TestRaft) GetID() uuid.UUID {
+	return uuid.Nil
+}
 
 func (TestRaft) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
 	fmt.Printf("Received request: %+v\n", *args)
@@ -62,15 +67,14 @@ func Test_CanConnect(t *testing.T) {
 		go func() {
 			// let's now attempt to connect to it
 			// note: this is a lazy connect
-			peer, err := manager.ConnectToPeer(":1234")
+			peer, err := manager.ConnectToPeer(":1234", uuid.Nil)
 			assert.NoError(t, err)
 
 			// even if server is not actually up yet, this method
 			// will not fail (it will retry internally)
 			var resp1 common.ClientRequestRPCResult
 			err = peer.ClientRequest(&common.ClientRequestRPC{
-				MinAppliedIndex: 10,
-				Data:            []byte("asdf"),
+				Data: []byte("asdf"),
 			}, &resp1)
 			assert.NoError(t, err)
 			assert.True(t, resp1.Success)

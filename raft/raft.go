@@ -94,7 +94,13 @@ func NewRaftServer(
 	go newRaftServer.electionTimeoutController(cluster.ElectionTimeout)
 	go newRaftServer.heartBeatTimeoutController(cluster.HeartBeatTimeout)
 	newRaftServer.ElectionTimeoutChan <- true
+	newRaftServer.HeartbeatTimeoutChan <- false
 
+	err = manager.Start(me.NetAddress, newRaftServer)
+	if err != nil {
+		log.Printf("failed starting RPC server: %+v\n", err)
+		return nil
+	}
 	log.Printf("Initialization complete for server %v\n", me.ID)
 	return newRaftServer
 }
@@ -414,21 +420,25 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 	timeoutRandomizer := func(timeout time.Duration) time.Duration {
 		return timeout + time.Duration(rand.Float64()*float64(timeout))
 	}
+	log.Printf("%v: election timeout controller started\n", server.MyID)
 	ticker := time.NewTicker(timeoutRandomizer(timeout))
-	ticker.Stop()
-	select {
-	case <-ticker.C:
-		ticker.Stop()
-		server.Mutex.Lock()
-		server.convertToCandidate()
-		server.Mutex.Unlock()
-		ticker.Reset(timeoutRandomizer(timeout))
-	case reset := <-server.ElectionTimeoutChan:
-		if reset == true {
-			log.Printf("%v: resetting timer\n", server.MyID)
-			ticker.Reset(timeoutRandomizer(timeout))
-		} else {
+	for {
+		select {
+		case <-ticker.C:
+			log.Printf("%v: received election timeout tick\n", server.MyID)
 			ticker.Stop()
+			server.Mutex.Lock()
+			server.convertToCandidate()
+			server.Mutex.Unlock()
+			ticker.Reset(timeoutRandomizer(timeout))
+		case reset := <-server.ElectionTimeoutChan:
+			if reset == true {
+				log.Printf("%v: resetting timer\n", server.MyID)
+				ticker.Reset(timeoutRandomizer(timeout))
+			} else {
+				log.Printf("%v: stopping timer\n", server.MyID)
+				ticker.Stop()
+			}
 		}
 	}
 }
@@ -440,17 +450,18 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 // this broadcasts an empty append entries to all servers.
 func (server *RaftServer) heartBeatTimeoutController(timeout time.Duration) {
 	ticker := time.NewTicker(timeout)
-	ticker.Stop()
-	select {
-	case <-ticker.C:
-		ticker.Stop()
-		server.broadcastAppendEntries()
-		ticker.Reset(timeout)
-	case reset := <-server.ElectionTimeoutChan:
-		if reset == true {
-			ticker.Reset(timeout)
-		} else {
+	for {
+		select {
+		case <-ticker.C:
 			ticker.Stop()
+			server.broadcastAppendEntries()
+			ticker.Reset(timeout)
+		case reset := <-server.HeartbeatTimeoutChan:
+			if reset == true {
+				ticker.Reset(timeout)
+			} else {
+				ticker.Stop()
+			}
 		}
 	}
 }

@@ -15,15 +15,15 @@ func Test_SimpleElection(t *testing.T) {
 	serverDetails := []common.Server{
 		{
 			ID:         uuid.New(),
-			NetAddress: ":12345",
+			NetAddress: ":1234",
 		},
 		{
 			ID:         uuid.New(),
-			NetAddress: ":12346",
+			NetAddress: ":1235",
 		},
 		{
 			ID:         uuid.New(),
-			NetAddress: ":12347",
+			NetAddress: ":1236",
 		},
 	}
 	var servers []*RaftServer
