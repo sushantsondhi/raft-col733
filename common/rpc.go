@@ -1,6 +1,8 @@
-package raft
+package common
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 type ClientRequestRPC struct {
 	Data []byte

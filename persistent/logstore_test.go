@@ -1,8 +1,8 @@
 package persistent_test
 
 import (
+	"github.com/sushantsondhi/raft-col733/common"
 	"github.com/sushantsondhi/raft-col733/persistent"
-	"github.com/sushantsondhi/raft-col733/raft"
 	"testing"
 )
 
@@ -24,7 +24,7 @@ func TestLogStore_Store(t *testing.T) {
 		t.Error("db creation failed", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 0,
 		Term:  0,
 	})
@@ -33,7 +33,7 @@ func TestLogStore_Store(t *testing.T) {
 		t.Error("failed to append in empty log", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 1,
 		Term:  0,
 	})
@@ -42,7 +42,7 @@ func TestLogStore_Store(t *testing.T) {
 		t.Error("failed to append in non empty log", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 0,
 		Term:  0,
 	})
@@ -51,7 +51,7 @@ func TestLogStore_Store(t *testing.T) {
 		t.Error("failed to add log at an existing index", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 69,
 		Term:  0,
 	})
@@ -70,7 +70,7 @@ func TestLogStore_Get(t *testing.T) {
 		t.Error("db creation failed", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 0,
 		Term:  0,
 		Data:  []byte("entry0"),
@@ -80,7 +80,7 @@ func TestLogStore_Get(t *testing.T) {
 		t.Error("failed to append in empty log", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 1,
 		Term:  0,
 		Data:  []byte("entry1"),
@@ -90,7 +90,7 @@ func TestLogStore_Get(t *testing.T) {
 		t.Error("failed to append in non empty log", err)
 	}
 
-	var entry *raft.LogEntry
+	var entry *common.LogEntry
 	entry, err = d.Get(0)
 
 	if err != nil {
@@ -101,7 +101,7 @@ func TestLogStore_Get(t *testing.T) {
 		t.Error("got corrupted/incorrect data", err)
 	}
 
-	err = d.Store(raft.LogEntry{
+	err = d.Store(common.LogEntry{
 		Index: 0,
 		Term:  0,
 		Data:  []byte("updated_entry0"),

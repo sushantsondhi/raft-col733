@@ -1,6 +1,8 @@
-package raft
+package common
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 // LogEntry represents one particular log entry in the raft
 type LogEntry struct {
@@ -14,8 +16,8 @@ type LogEntry struct {
 type LogStore interface {
 	// Store should overwrite the log entry if it already exists (at that index).
 	Store(entry LogEntry) error
-	Get(index uint64) (*LogEntry, error)
-	Length() (uint64, error)
+	Get(index int64) (*LogEntry, error)
+	Length() (int64, error)
 }
 
 // PersistentStore implementations can be used as general-purpose stores
@@ -23,6 +25,7 @@ type LogStore interface {
 type PersistentStore interface {
 	Set(key, value []byte) error
 	Get(key []byte) ([]byte, error)
+	GetDefault(key []byte, defaultVal []byte) ([]byte, error)
 }
 
 // FSM represents a general finite-state machine which has only a single operation -- Apply.
@@ -45,5 +48,5 @@ type RPCManager interface {
 	// It starts the RPC server at the given address and blocks forever.
 	// Start only returns error if it fails to start the server.
 	Start(address ServerAddress, server RPCServer) error
-	ConnectToPeer(address ServerAddress) (RPCServer, error)
+	ConnectToPeer(address ServerAddress, id uuid.UUID) (RPCServer, error)
 }

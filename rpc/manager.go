@@ -2,7 +2,7 @@ package rpc
 
 import (
 	"github.com/google/uuid"
-	"github.com/sushantsondhi/raft-col733/raft"
+	"github.com/sushantsondhi/raft-col733/common"
 	"net"
 	"net/rpc"
 )
@@ -11,7 +11,9 @@ import (
 // the golang's net/rpc package
 type Manager struct{}
 
-func (manager *Manager) Start(address raft.ServerAddress, server raft.RPCServer) error {
+var _ common.RPCManager = &Manager{}
+
+func (manager *Manager) Start(address common.ServerAddress, server common.RPCServer) error {
 	rpcServ := rpc.NewServer()
 	if err := rpcServ.RegisterName("RPCServer", server); err != nil {
 		return err
@@ -29,6 +31,6 @@ func (manager *Manager) Start(address raft.ServerAddress, server raft.RPCServer)
 	}
 }
 
-func (manager *Manager) ConnectToPeer(address raft.ServerAddress, id uuid.UUID) (raft.RPCServer, error) {
+func (manager *Manager) ConnectToPeer(address common.ServerAddress, id uuid.UUID) (common.RPCServer, error) {
 	return NewPeer(address, id), nil
 }

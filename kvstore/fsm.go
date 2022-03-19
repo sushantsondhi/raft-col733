@@ -3,7 +3,7 @@ package kvstore
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/sushantsondhi/raft-col733/raft"
+	"github.com/sushantsondhi/raft-col733/common"
 )
 
 type RequestType int
@@ -26,7 +26,7 @@ type KeyValFSM struct {
 	store map[string]string
 }
 
-var _ raft.FSM = &KeyValFSM{}
+var _ common.FSM = &KeyValFSM{}
 
 func NewKeyValFSM() *KeyValFSM {
 	return &KeyValFSM{
@@ -34,7 +34,7 @@ func NewKeyValFSM() *KeyValFSM {
 	}
 }
 
-func (fsm *KeyValFSM) Apply(entry raft.LogEntry) ([]byte, error) {
+func (fsm *KeyValFSM) Apply(entry common.LogEntry) ([]byte, error) {
 	var request Request
 	if err := json.Unmarshal(entry.Data, &request); err != nil {
 		return nil, err

@@ -2,7 +2,7 @@ package rpc
 
 import (
 	"github.com/google/uuid"
-	"github.com/sushantsondhi/raft-col733/raft"
+	"github.com/sushantsondhi/raft-col733/common"
 	"io"
 	"net/rpc"
 	"time"
@@ -12,14 +12,14 @@ import (
 // golang's net/rpc package
 type Peer struct {
 	id      uuid.UUID
-	address raft.ServerAddress
+	address common.ServerAddress
 	client  *rpc.Client
 }
 
 // NewPeer creates a Peer instance with lazy initialization.
 // Actual RPC connection is not established until an actual RPC
 // call takes place.
-func NewPeer(address raft.ServerAddress, id uuid.UUID) *Peer {
+func NewPeer(address common.ServerAddress, id uuid.UUID) *Peer {
 	return &Peer{
 		id:      id,
 		address: address,
@@ -52,14 +52,14 @@ func (peer *Peer) GetID() uuid.UUID {
 	return peer.id
 }
 
-func (peer *Peer) ClientRequest(args *raft.ClientRequestRPC, result *raft.ClientRequestRPCResult) error {
+func (peer *Peer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
 	return peer.call("RPCServer.ClientRequest", args, result)
 }
 
-func (peer *Peer) RequestVote(args *raft.RequestVoteRPC, result *raft.RequestVoteRPCResult) error {
+func (peer *Peer) RequestVote(args *common.RequestVoteRPC, result *common.RequestVoteRPCResult) error {
 	return peer.call("RPCServer.RequestVote", args, result)
 }
 
-func (peer *Peer) AppendEntries(args *raft.AppendEntriesRPC, result *raft.AppendEntriesRPCResult) error {
+func (peer *Peer) AppendEntries(args *common.AppendEntriesRPC, result *common.AppendEntriesRPCResult) error {
 	return peer.call("RPCServer.AppendEntries", args, result)
 }

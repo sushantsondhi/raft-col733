@@ -2,6 +2,7 @@ package raft
 
 import (
 	"github.com/google/uuid"
+	"github.com/sushantsondhi/raft-col733/common"
 	"go.uber.org/multierr"
 	"log"
 	"math/rand"
@@ -20,46 +21,102 @@ type RaftServer struct {
 	state
 
 	// Data Stores
-	FSM             FSM
-	LogStore        LogStore
-	PersistentStore PersistentStore
+	FSM             common.FSM
+	LogStore        common.LogStore
+	PersistentStore common.PersistentStore
 
 	// Peers
 	MyID  uuid.UUID
-	Peers []RPCServer
+	Peers []common.RPCServer
 
 	// Synchronization primitives
 	Mutex                sync.Mutex
 	ElectionTimeoutChan  chan bool
 	HeartbeatTimeoutChan chan bool
-	ApplyCh              map[int64]chan ApplyMsg
+	ApplyChan            map[int64]chan ApplyMsg
 }
+
+var _ common.RPCServer = &RaftServer{}
 
 func NewRaftServer(
-	me Server,
-	cluster ClusterConfig,
-	fsm FSM,
-	logStore LogStore,
-	persistentStore PersistentStore,
-	manager RPCManager,
+	me common.Server,
+	cluster common.ClusterConfig,
+	fsm common.FSM,
+	logStore common.LogStore,
+	persistentStore common.PersistentStore,
+	manager common.RPCManager,
 ) *RaftServer {
-	// TODO: lots of TODO
-	return &RaftServer{}
+	newRaftServer := &RaftServer{
+		state: state{
+			Term:          getTerm(persistentStore),
+			VotedFor:      getVotedFor(persistentStore),
+			CommitIndex:   getCommitIndex(persistentStore),
+			State:         Candidate,
+			AppliedIndex:  0,
+			NextIndexMap:  make(map[uuid.UUID]int64),
+			MatchIndexMap: make(map[uuid.UUID]int64),
+		},
+		FSM:             fsm,
+		LogStore:        logStore,
+		PersistentStore: persistentStore,
+		MyID:            me.ID,
+	}
+	// Add a zero log entry
+	err := logStore.Store(common.LogEntry{
+		Index: 0,
+		Term:  0,
+		Data:  nil,
+	})
+	if err != nil {
+		log.Printf("error initializing log store: %+v\n", err)
+		return nil
+	}
+	for _, server := range cluster.Cluster {
+		if server.ID == me.ID {
+			continue
+		}
+		peer, err := manager.ConnectToPeer(server.NetAddress, server.ID)
+		if err != nil {
+			log.Printf("can't connect to peer %s\n", server.NetAddress)
+			return nil
+		}
+		newRaftServer.Peers = append(newRaftServer.Peers, peer)
+	}
+	for _, peer := range newRaftServer.Peers {
+		newRaftServer.NextIndexMap[peer.GetID()] = 0
+		newRaftServer.MatchIndexMap[peer.GetID()] = 0
+	}
+
+	newRaftServer.ElectionTimeoutChan = make(chan bool)
+	newRaftServer.HeartbeatTimeoutChan = make(chan bool)
+	newRaftServer.ApplyChan = make(map[int64]chan ApplyMsg)
+
+	go newRaftServer.electionTimeoutController(cluster.ElectionTimeout)
+	go newRaftServer.heartBeatTimeoutController(cluster.HeartBeatTimeout)
+	newRaftServer.ElectionTimeoutChan <- true
+
+	log.Printf("Initialization complete for server %v\n", me.ID)
+	return newRaftServer
 }
 
-func (server *RaftServer) ClientRequest(args *ClientRequestRPC, result *ClientRequestRPCResult) error {
+func (server *RaftServer) GetID() uuid.UUID {
+	return server.MyID
+}
+
+func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (server *RaftServer) RequestVote(args *RequestVoteRPC, result *RequestVoteRPCResult) error {
+func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *common.RequestVoteRPCResult) error {
 	server.Mutex.Lock()
 	defer server.Mutex.Unlock()
 	if args.Term > server.Term {
 		// Update term and convert to follower
-		// TODO: make this persistent after Sushant's PR
 		server.Term = args.Term
+		setTerm(server.PersistentStore, server.Term)
 		server.VotedFor = nil
+		setVotedFor(server.PersistentStore, server.VotedFor)
 		server.convertToFollower()
 	}
 	result.Term = server.Term
@@ -91,14 +148,18 @@ func (server *RaftServer) RequestVote(args *RequestVoteRPC, result *RequestVoteR
 	return nil
 }
 
-func (server *RaftServer) AppendEntries(args *AppendEntriesRPC, result *AppendEntriesRPCResult) error {
-	//TODO implement me
-	panic("implement me")
+func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *common.AppendEntriesRPCResult) error {
+	server.Mutex.Lock()
+	defer server.Mutex.Unlock()
+	if args.Term == server.Term && server.State != Leader {
+		server.ElectionTimeoutChan <- true
+	}
+	return nil
 }
 
-func (server *RaftServer) getLastLogEntry() (entry *LogEntry, err error) {
+func (server *RaftServer) getLastLogEntry() (entry *common.LogEntry, err error) {
 	var lengthErr, logErr error
-	var logLength uint64
+	var logLength int64
 	logLength, lengthErr = server.LogStore.Length()
 	entry, logErr = server.LogStore.Get(logLength - 1)
 	err = multierr.Combine(lengthErr, logErr)
@@ -119,18 +180,20 @@ func (server *RaftServer) convertToFollower() {
 // state to a candidate, it assumes that the caller has already
 // acquired mutex.
 func (server *RaftServer) convertToCandidate() {
+	log.Printf("%v: converting to candidate\n", server.MyID)
 	if server.State == Leader {
 		panic("Unexpected transition from Leader -> Candidate")
 	}
 	server.State = Candidate
 	server.CurrentLeader = nil
-	// TODO: make this persistent after sushant's PR
 	// TODO: this should be in a transaction
 	server.Term++
+	setTerm(server.PersistentStore, server.Term)
 	server.VotedFor = &server.MyID
+	setVotedFor(server.PersistentStore, server.VotedFor)
 
 	// Send RequestVoteRPC to all servers
-	totalServers := 0 // TODO fill this after sushant's PR
+	totalServers := len(server.Peers) + 1
 	reqToMajority := totalServers/2 + 1
 
 	lastLogEntry, err := server.getLastLogEntry()
@@ -139,7 +202,7 @@ func (server *RaftServer) convertToCandidate() {
 		return
 	}
 
-	requestVoteRPC := RequestVoteRPC{
+	requestVoteRPC := common.RequestVoteRPC{
 		Term:         server.Term,
 		CandidateID:  server.MyID,
 		LastLogIndex: lastLogEntry.Index,
@@ -150,7 +213,7 @@ func (server *RaftServer) convertToCandidate() {
 	for _, peer := range server.Peers {
 		peer := peer
 		go func() {
-			var response RequestVoteRPCResult
+			var response common.RequestVoteRPCResult
 			if err := peer.RequestVote(&requestVoteRPC, &response); err != nil {
 				log.Printf("error requesting vote from peer: %+v\n", err)
 				voteCh <- false
@@ -158,9 +221,10 @@ func (server *RaftServer) convertToCandidate() {
 				server.Mutex.Lock()
 				defer server.Mutex.Unlock()
 				if server.Term < response.Term {
-					// TODO: make persistent
 					server.Term = response.Term
+					setTerm(server.PersistentStore, server.Term)
 					server.VotedFor = nil
+					setVotedFor(server.PersistentStore, server.VotedFor)
 					server.convertToFollower()
 				}
 				voteCh <- response.VoteGranted
@@ -214,15 +278,12 @@ func (server *RaftServer) convertToLeader(term int64) {
 		// Note: the paper specifies to set it to lastLogEntry.Index + 1, but we set to lastLogEntry.Index.
 		// Why? Because if set to lastLogEntry.Index + 1, the followers will never be updated in the event
 		// that no more new requests come from client.
-		// TODO: change this logic
-		if lastLogEntry != nil {
-			server.NextIndexMap[serverID] = lastLogEntry.Index
-		} else {
-			server.NextIndexMap[serverID] = 0
+		server.NextIndexMap[serverID] = lastLogEntry.Index
+		if lastLogEntry.Index == 0 {
+			server.NextIndexMap[serverID] = 1
 		}
 		// At the same time we assume, most pessimistically, that we don't know if the other servers have even a single log entry
-		// TODO change this
-		server.MatchIndexMap[serverID] = -1
+		server.MatchIndexMap[serverID] = 0
 	}
 	server.broadcastAppendEntries()
 }
@@ -236,27 +297,26 @@ func (server *RaftServer) broadcastAppendEntries() {
 			server.Mutex.Lock()
 			indexToSend := server.NextIndexMap[peer.GetID()]
 			if length, err := server.LogStore.Length(); err == nil {
-				if length == uint64(indexToSend) {
+				if length == indexToSend {
 					server.Mutex.Unlock()
 					return
 				}
 			}
-			request := AppendEntriesRPC{
+			request := common.AppendEntriesRPC{
 				Term:              server.Term,
 				Leader:            server.MyID,
 				LeaderCommitIndex: server.CommitIndex,
-				// TODO
-				PrevLogIndex: -1,
-				PrevLogTerm:  -1,
+				PrevLogIndex:      -1,
+				PrevLogTerm:       -1,
 			}
 			server.Mutex.Unlock()
-			logEntry, err := server.LogStore.Get(uint64(indexToSend))
+			logEntry, err := server.LogStore.Get(indexToSend)
 			if err != nil {
 				log.Printf("failed to get from log store: %+v\n", err)
 				return
 			}
 			if indexToSend > 0 {
-				prevLogEntry, err := server.LogStore.Get(uint64(indexToSend - 1))
+				prevLogEntry, err := server.LogStore.Get(indexToSend - 1)
 				if err != nil {
 					log.Printf("failed to get from log store: %+v\n", err)
 					return
@@ -266,7 +326,7 @@ func (server *RaftServer) broadcastAppendEntries() {
 			}
 			request.Entries = append(request.Entries, *logEntry)
 
-			var response AppendEntriesRPCResult
+			var response common.AppendEntriesRPCResult
 			if err := peer.AppendEntries(&request, &response); err != nil {
 				log.Printf("error on AppendEntriesRPC: %+v\n", err)
 				return
@@ -277,9 +337,10 @@ func (server *RaftServer) broadcastAppendEntries() {
 				// Either the peer was on a higher term, or our term number changed concurrently
 				// In either case the request is invalid and must be discarded
 				if response.Term > server.Term {
-					// TODO: persistent
 					server.Term = response.Term
+					setTerm(server.PersistentStore, server.Term)
 					server.VotedFor = nil
+					setVotedFor(server.PersistentStore, server.VotedFor)
 					server.convertToFollower()
 				}
 				return
@@ -319,12 +380,12 @@ func (server *RaftServer) commitEntries() {
 	// replicated at ceil(n/2) servers (including ourselves)
 	n := len(matchIndexes) + 1
 	if matchIndexes[n/2] > server.CommitIndex {
-		// TODO: persist this after sushant's PR
 		server.CommitIndex = matchIndexes[n/2]
+		setCommitIndex(server.PersistentStore, server.CommitIndex)
 	}
 
 	for server.AppliedIndex < server.CommitIndex {
-		logEntry, err := server.LogStore.Get(uint64(server.AppliedIndex + 1))
+		logEntry, err := server.LogStore.Get(server.AppliedIndex + 1)
 		if err != nil {
 			log.Printf("error getting log entry from log store: %+v\n", err)
 			break
@@ -333,7 +394,7 @@ func (server *RaftServer) commitEntries() {
 		if err != nil {
 			log.Printf("error applying log entry to FSM: :%+v\n", err)
 		}
-		if ch, ok := server.ApplyCh[server.AppliedIndex]; ok {
+		if ch, ok := server.ApplyChan[server.AppliedIndex]; ok {
 			ch <- ApplyMsg{
 				Err:   err,
 				Bytes: bytes,
@@ -364,6 +425,7 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 		ticker.Reset(timeoutRandomizer(timeout))
 	case reset := <-server.ElectionTimeoutChan:
 		if reset == true {
+			log.Printf("%v: resetting timer\n", server.MyID)
 			ticker.Reset(timeoutRandomizer(timeout))
 		} else {
 			ticker.Stop()
