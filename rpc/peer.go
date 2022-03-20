@@ -28,6 +28,7 @@ func NewPeer(address common.ServerAddress, id uuid.UUID) *Peer {
 	}
 }
 
+// TODO: Default value of result ??
 // call takes care of automatically re-trying on transient failures
 func (peer *Peer) call(method string, args interface{}, result interface{}) (err error) {
 	if peer.disconnected {

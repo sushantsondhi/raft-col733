@@ -6,8 +6,9 @@ import (
 
 // LogEntry represents one particular log entry in the raft
 type LogEntry struct {
-	Index, Term int64
-	Data        []byte
+	Index, Term   int64
+	Data          []byte
+	TransactionId uuid.UUID
 }
 
 // LogStore is the interface that when implemented can be used as

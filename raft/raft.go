@@ -127,8 +127,9 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 	if server.State == Leader {
 		log.Printf("%v handling client request as leader\n", server.MyID)
 		NewLogEntry := common.LogEntry{
-			Term: server.Term,
-			Data: args.Data,
+			Term:          server.Term,
+			Data:          args.Data,
+			TransactionId: args.TransactionId,
 		}
 		if length, err := server.LogStore.Length(); err == nil {
 			NewLogEntry.Index = length
@@ -143,6 +144,7 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 			result.Success = false
 			return fmt.Errorf("Unable to store entry in leader logstore: %+v\n", err)
 		}
+
 		server.ApplyChan[NewLogEntry.Index] = make(chan ApplyMsg)
 		server.Mutex.Unlock()
 		server.broadcastAppendEntries()
@@ -165,7 +167,10 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 			}
 		}
 		server.Mutex.Unlock()
-		return fmt.Errorf("Not connected to Leader\n")
+		// No peer that I know of is a leader
+		result.Success = false
+		result.Error = "Not connected to Leader"
+		return nil
 	}
 }
 
@@ -339,11 +344,14 @@ func (server *RaftServer) convertToFollower() {
 
 // convertToCandidate method will initiate transition of Raft's server
 // state to a candidate, it assumes that the caller has already
-// acquired mutex.
+// acquired mutex.	`
 func (server *RaftServer) convertToCandidate() {
 	log.Printf("%v: converting to candidate\n", server.MyID)
+	// TODO: Should not be a panic
+	// If thread running this routine is slow then the an
+	// election timeout may occur before stop=true is put in electionTimeoutChan
 	if server.State == Leader {
-		panic("Unexpected transition from Leader -> Candidate")
+		return
 	}
 	server.State = Candidate
 	server.CurrentLeader = nil
@@ -425,6 +433,7 @@ func (server *RaftServer) convertToLeader(term int64) {
 		}
 		return
 	}
+
 	if server.State != Candidate {
 		panic("fatal: invalid transition from Follower/Leader -> Leader")
 	}
@@ -547,9 +556,18 @@ func (server *RaftServer) commitEntries() {
 	// This implies that the value at floor(n/2) is the minimum value that is guaranteed to be
 	// replicated at ceil(n/2) servers (including ourselves)
 	n := len(matchIndexes) + 1
+
 	if matchIndexes[n/2] > server.CommitIndex {
-		server.CommitIndex = matchIndexes[n/2]
-		setCommitIndex(server.PersistentStore, server.CommitIndex)
+		matchedEntry, err := server.LogStore.Get(matchIndexes[n/2])
+		if err != nil {
+			log.Printf("error getting log entry %+v\n", err)
+			return
+		}
+		if matchedEntry.Term == server.Term {
+			server.CommitIndex = matchIndexes[n/2]
+			setCommitIndex(server.PersistentStore, server.CommitIndex)
+		}
+
 	}
 
 	for server.AppliedIndex < server.CommitIndex {

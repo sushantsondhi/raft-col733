@@ -66,3 +66,5 @@ func TestKeyValFSM_Apply(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualValues(t, bytes, []byte("2"))
 }
+
+// TODO: Write tests for idempotence
