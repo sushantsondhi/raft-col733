@@ -73,16 +73,74 @@ func verifyElectionSafetyAndLiveness(t *testing.T, servers []*RaftServer) {
 }
 
 func Test_SimpleElection(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
-	t.Cleanup(cleanupDbFiles)
 	verifyElectionSafetyAndLiveness(t, servers)
 }
 
 func Test_ElectionWithoutHeartbeat(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	clusterConfig.HeartBeatTimeout = 10 * time.Hour
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func Test_ReElection(t *testing.T) {
 	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
+	clusterConfig2.ElectionTimeout = time.Second
+	clusterConfig3.ElectionTimeout = time.Second
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+	// now 1 must have been elected as leader, so we disconnect it from cluster
+	servers[0].Disconnect()
+	// someone else should be elected as a leader
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.True(t, servers[1].State == Leader || servers[2].State == Leader)
+	// note that server 1 will still remain a leader but of an older term
+	assert.Equal(t, servers[0].State, Leader)
+	assert.Less(t, servers[0].Term, servers[1].Term)
+
+	// now reconnect server 1 to cluster
+	// it will convert to follower with same term
+	servers[0].Reconnect()
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Follower)
+	assert.Equal(t, servers[0].Term, servers[1].Term)
+}
+
+func Test_ReJoin(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
+	clusterConfig2.ElectionTimeout = time.Second
+	clusterConfig3.ElectionTimeout = time.Second
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+
+	// now disconnect 2 (a follower) from the cluster
+	servers[2].Disconnect()
+	// it should not affect election safety and liveness
+	verifyElectionSafetyAndLiveness(t, servers)
+	// wait for a few more seconds
+	time.Sleep(3 * time.Second)
+	// term of 2 must be ahead of the other two
+	assert.Equal(t, servers[2].State, Candidate)
+	assert.Greater(t, servers[2].Term, servers[0].Term)
+	assert.Greater(t, servers[2].Term, servers[1].Term)
+
+	// now we reconnect 2
+	servers[2].Reconnect()
 	verifyElectionSafetyAndLiveness(t, servers)
 }
