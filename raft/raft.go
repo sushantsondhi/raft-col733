@@ -220,6 +220,21 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 			server.CurrentLeader = &args.Leader
 		}
 
+		if length, err := server.LogStore.Length(); err == nil {
+			if args.PrevLogIndex < length {
+				prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex)
+				if err != nil {
+					return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
+				}
+				if prevLogEntry.Term != args.PrevLogTerm {
+					return fmt.Errorf("Peer Entries are not upto date\n")
+				}
+			} else {
+				return fmt.Errorf("Peer Entries are not upto date\n")
+			}
+		} else {
+			return fmt.Errorf("Unable to get log length: %+v\n", err)
+		}
 		if err := server.LogStore.Store(args.Entries[0]); err != nil {
 			return fmt.Errorf("Unable to append Entry: %+v\n", err)
 		}
