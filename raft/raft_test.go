@@ -15,15 +15,15 @@ func Test_SimpleElection(t *testing.T) {
 	serverDetails := []common.Server{
 		{
 			ID:         uuid.New(),
-			NetAddress: ":1234",
+			NetAddress: ":12345",
 		},
 		{
 			ID:         uuid.New(),
-			NetAddress: ":1235",
+			NetAddress: ":12346",
 		},
 		{
 			ID:         uuid.New(),
-			NetAddress: ":1236",
+			NetAddress: ":12347",
 		},
 	}
 	var servers []*RaftServer
@@ -41,7 +41,7 @@ func Test_SimpleElection(t *testing.T) {
 		servers = append(servers, server)
 	}
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 20; i++ {
 		leaders := make(map[int64][]uuid.UUID)
 		for _, server := range servers {
 			server.Mutex.Lock()
