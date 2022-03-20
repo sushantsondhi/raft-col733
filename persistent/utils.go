@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"github.com/sushantsondhi/raft-col733/raft"
+	"github.com/sushantsondhi/raft-col733/common"
 )
 
 func EncodeToBytes(p interface{}) ([]byte, error) {
@@ -19,20 +19,20 @@ func EncodeToBytes(p interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func DecodeToLogEntry(s []byte) (raft.LogEntry, error) {
-	entry := raft.LogEntry{}
+func DecodeToLogEntry(s []byte) (common.LogEntry, error) {
+	entry := common.LogEntry{}
 	dec := gob.NewDecoder(bytes.NewReader(s))
 	err := dec.Decode(&entry)
 
 	return entry, err
 }
 
-func bytesToUint64(b []byte) uint64 {
-	return binary.BigEndian.Uint64(b)
+func bytesToInt64(b []byte) int64 {
+	return int64(binary.LittleEndian.Uint64(b))
 }
 
-func uint64ToBytes(u uint64) []byte {
+func int64ToBytes(i int64) []byte {
 	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, u)
+	binary.LittleEndian.PutUint64(buf, uint64(i))
 	return buf
 }

@@ -1,4 +1,4 @@
-package raft
+package common
 
 import (
 	"github.com/google/uuid"
@@ -21,3 +21,9 @@ type ClusterConfig struct {
 	HeartBeatTimeout time.Duration
 	ElectionTimeout  time.Duration
 }
+
+const (
+	VotedFor    string = "votedFor"
+	Term        string = "term"
+	CommitIndex string = "commitIndex"
+)

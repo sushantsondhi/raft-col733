@@ -1,20 +1,17 @@
-package raft
+package common
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 type ClientRequestRPC struct {
-	// Request will only be satisfied if applied index at server is greater than this value
-	// (ZooKeeper semantics)
-	MinAppliedIndex int64
-	Data            []byte
+	Data []byte
 }
 
 type ClientRequestRPCResult struct {
 	Success bool
 	// Error will be non-empty iff Success is False
 	Error string
-	// LatestAppliedIndex contains value of applied index from the server
-	LatestAppliedIndex int64
 	// Data can be non-nil for example for Get calls
 	Data []byte
 }

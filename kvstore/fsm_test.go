@@ -3,30 +3,30 @@ package kvstore_test
 import (
 	"encoding/json"
 	"github.com/stretchr/testify/assert"
+	"github.com/sushantsondhi/raft-col733/common"
 	"github.com/sushantsondhi/raft-col733/kvstore"
-	"github.com/sushantsondhi/raft-col733/raft"
 	"testing"
 )
 
 func TestKeyValFSM_Apply(t *testing.T) {
-	setMarshaller := func(key, val string) raft.LogEntry {
+	setMarshaller := func(key, val string) common.LogEntry {
 		bytes, err := json.Marshal(kvstore.Request{
 			Type: kvstore.Set,
 			Key:  key,
 			Val:  val,
 		})
 		assert.NoError(t, err)
-		return raft.LogEntry{
+		return common.LogEntry{
 			Data: bytes,
 		}
 	}
-	getMarshaller := func(key string) raft.LogEntry {
+	getMarshaller := func(key string) common.LogEntry {
 		bytes, err := json.Marshal(kvstore.Request{
 			Type: kvstore.Get,
 			Key:  key,
 		})
 		assert.NoError(t, err)
-		return raft.LogEntry{
+		return common.LogEntry{
 			Data: bytes,
 		}
 	}
