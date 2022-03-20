@@ -19,7 +19,7 @@ func makeRaftCluster(t *testing.T, configs ...common.ClusterConfig) (servers []*
 		assert.NoError(t, err)
 		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
 		assert.NoError(t, err)
-		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], nil, logstore, pstore, &rpc.Manager{})
+		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], nil, logstore, pstore, rpc.NewManager())
 		assert.NotNil(t, raftServer)
 		servers = append(servers, raftServer)
 	}

@@ -93,3 +93,7 @@ func (d DbLogStore) Length() (int64, error) {
 	return logLength, err
 
 }
+
+func (d DbLogStore) Close() error {
+	return d.db.Close()
+}

@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"errors"
 	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/common"
 	"io"
@@ -11,9 +12,10 @@ import (
 // Peer is the implementation of raft.RPCServer interface using the
 // golang's net/rpc package
 type Peer struct {
-	id      uuid.UUID
-	address common.ServerAddress
-	client  *rpc.Client
+	id           uuid.UUID
+	address      common.ServerAddress
+	client       *rpc.Client
+	disconnected bool
 }
 
 // NewPeer creates a Peer instance with lazy initialization.
@@ -28,6 +30,9 @@ func NewPeer(address common.ServerAddress, id uuid.UUID) *Peer {
 
 // call takes care of automatically re-trying on transient failures
 func (peer *Peer) call(method string, args interface{}, result interface{}) (err error) {
+	if peer.disconnected {
+		return errors.New("disconnected rpc connection")
+	}
 	for i := 0; i < 3; i++ {
 		if peer.client == nil {
 			if peer.client, err = rpc.Dial("tcp", string(peer.address)); err != nil {
