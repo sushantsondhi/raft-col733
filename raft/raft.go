@@ -112,8 +112,8 @@ func (server *RaftServer) GetID() uuid.UUID {
 }
 
 func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
+	server.Mutex.Lock()
 	if server.State == Leader {
-		server.Mutex.Lock()
 		NewLogEntry := common.LogEntry{
 			Term: server.Term,
 			Data: args.Data,
@@ -131,22 +131,27 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 			result.Success = false
 			return fmt.Errorf("Unable to store entry in leader logstore: %+v\n", err)
 		}
-
+		server.ApplyChan[NewLogEntry.Index] = make(chan ApplyMsg)
 		server.Mutex.Unlock()
 		server.broadcastAppendEntries()
 		ret := <-server.ApplyChan[NewLogEntry.Index]
 		result.Error = ret.Err.Error()
 		result.Data = ret.Bytes
-		result.Success = True
+		if ret.Err != nil {
+			result.Success = true
+		} else {
+			result.Success = false
+		}
+		return nil
 	} else {
+		server.Mutex.Unlock()
 		for _, peer := range server.Peers {
 			if server.CurrentLeader != nil && peer.GetID() == *server.CurrentLeader {
-				peer.ClientRequest(args, result)
-				break
+				return peer.ClientRequest(args, result)
 			}
 		}
+		return fmt.Errorf("Not connected to Leader\n")
 	}
-	return nil
 }
 
 func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *common.RequestVoteRPCResult) error {
