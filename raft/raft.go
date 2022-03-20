@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/common"
 	"go.uber.org/multierr"
@@ -111,8 +112,41 @@ func (server *RaftServer) GetID() uuid.UUID {
 }
 
 func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
-	//TODO implement me
-	panic("implement me")
+	if server.State == Leader {
+		server.Mutex.Lock()
+		NewLogEntry := common.LogEntry{
+			Term: server.Term,
+			Data: args.Data,
+		}
+		if length, err := server.LogStore.Length(); err == nil {
+			NewLogEntry.Index = length
+		} else {
+			server.Mutex.Unlock()
+			result.Success = false
+			return fmt.Errorf("Unable to get logStore length: %+v\n", err)
+		}
+
+		if err := server.LogStore.Store(NewLogEntry); err != nil {
+			server.Mutex.Unlock()
+			result.Success = false
+			return fmt.Errorf("Unable to store entry in leader logstore: %+v\n", err)
+		}
+
+		server.Mutex.Unlock()
+		server.broadcastAppendEntries()
+		ret := <-server.ApplyChan[NewLogEntry.Index]
+		result.Error = ret.Err.Error()
+		result.Data = ret.Bytes
+		result.Success = True
+	} else {
+		for _, peer := range server.Peers {
+			if server.CurrentLeader != nil && peer.GetID() == *server.CurrentLeader {
+				peer.ClientRequest(args, result)
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *common.RequestVoteRPCResult) error {
@@ -179,6 +213,10 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		}
 		if server.CurrentLeader == nil || *server.CurrentLeader != args.Leader {
 			server.CurrentLeader = &args.Leader
+		}
+
+		if err := server.LogStore.Store(args.Entries[0]); err != nil {
+			return fmt.Errorf("Unable to append Entry: %+v\n", err)
 		}
 		result.Success = true
 		result.Term = server.Term
