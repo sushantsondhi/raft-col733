@@ -145,10 +145,14 @@ func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *commo
 	}
 	if args.LastLogTerm > lastLogEntry.Term {
 		result.VoteGranted = true
+		server.VotedFor = &args.CandidateID
+		setVotedFor(server.PersistentStore, server.VotedFor)
 		return nil
 	}
 	if args.LastLogTerm == lastLogEntry.Term && args.LastLogIndex >= lastLogEntry.Index {
 		result.VoteGranted = true
+		server.VotedFor = &args.CandidateID
+		setVotedFor(server.PersistentStore, server.VotedFor)
 		return nil
 	}
 	result.VoteGranted = false

@@ -51,11 +51,8 @@ func generateClusterConfig(n int) common.ClusterConfig {
 	}
 }
 
-func Test_SimpleElection(t *testing.T) {
-	clusterConfig := generateClusterConfig(3)
-	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
-	t.Cleanup(cleanupDbFiles)
-
+func verifyElectionSafetyAndLiveness(t *testing.T, servers []*RaftServer) {
+	liveness := false
 	for i := 0; i < 20; i++ {
 		leaders := make(map[int64][]uuid.UUID)
 		for _, server := range servers {
@@ -68,7 +65,24 @@ func Test_SimpleElection(t *testing.T) {
 		for term, ldrs := range leaders {
 			fmt.Printf("Term = %d, ldrs = %v\n", term, ldrs)
 			assert.LessOrEqualf(t, len(ldrs), 1, "multiple leaders for term %d", term)
+			liveness = true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	assert.Truef(t, liveness, "election liveness not satisfied (no leader elected ever)")
+}
+
+func Test_SimpleElection(t *testing.T) {
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	t.Cleanup(cleanupDbFiles)
+	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func Test_ElectionWithoutHeartbeat(t *testing.T) {
+	clusterConfig := generateClusterConfig(3)
+	clusterConfig.HeartBeatTimeout = 10 * time.Hour
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	t.Cleanup(cleanupDbFiles)
+	verifyElectionSafetyAndLiveness(t, servers)
 }
