@@ -7,6 +7,7 @@ import (
 	"github.com/sushantsondhi/raft-col733/common"
 	"github.com/sushantsondhi/raft-col733/persistent"
 	"github.com/sushantsondhi/raft-col733/rpc"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,6 +102,7 @@ func Test_ReElection(t *testing.T) {
 	assert.Equal(t, servers[0].State, Leader)
 	// now 1 must have been elected as leader, so we disconnect it from cluster
 	servers[0].Disconnect()
+	time.Sleep(3 * time.Second)
 	// someone else should be elected as a leader
 	verifyElectionSafetyAndLiveness(t, servers)
 	assert.True(t, servers[1].State == Leader || servers[2].State == Leader)
@@ -143,4 +145,62 @@ func Test_ReJoin(t *testing.T) {
 	// now we reconnect 2
 	servers[2].Reconnect()
 	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func Test_ElectionSafety(t *testing.T) {
+
+	t.Cleanup(cleanupDbFiles)
+
+	clusterConfig := generateClusterConfig(5)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig, clusterConfig, clusterConfig)
+
+	var disconnectedQueue []int
+
+	for itr := 0; itr < 100; itr++ {
+		if itr%2 == 0 {
+			for serverIndex := range disconnectedQueue {
+				servers[serverIndex].Reconnect()
+			}
+			disconnectedQueue = disconnectedQueue[len(disconnectedQueue):]
+		} else {
+			var idx1, idx2 int
+			idx1 = rand.Intn(5)
+			idx2 = rand.Intn(5)
+			for idx2 == idx1 {
+				idx2 = rand.Intn(5)
+			}
+			servers[idx1].Disconnect()
+			servers[idx2].Disconnect()
+			disconnectedQueue = append(disconnectedQueue, idx1)
+			disconnectedQueue = append(disconnectedQueue, idx2)
+		}
+		time.Sleep(time.Second)
+	}
+
+	for _, server := range servers {
+		server.Stop()
+	}
+
+	var leaders = make(map[int64]map[uint32]bool)
+
+	for _, server := range servers {
+		for term, list := range server.Leaders {
+			for leader, _ := range list {
+				if leaders[term] == nil {
+					leaders[term] = make(map[uint32]bool)
+				}
+				leaders[term][leader] = true
+			}
+		}
+	}
+
+	for term, list := range leaders {
+		assert.LessOrEqualf(t, len(list), 1, "multiple leaders for term %d", term)
+		if len(list) > 0 {
+			for ldr, _ := range list {
+				fmt.Printf("[Test Output] Term %d had leader %d\n", term, ldr)
+			}
+		}
+	}
+
 }
