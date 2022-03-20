@@ -193,9 +193,6 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		fallthrough
 	case args.Term == server.Term:
 		if server.State != Follower {
-			if server.State == Leader {
-				panic("2 leaders in the same term")
-			}
 			server.convertToFollower()
 		}
 		if server.CurrentLeader == nil || *server.CurrentLeader != args.Leader {
@@ -557,7 +554,14 @@ func (server *RaftServer) heartBeatTimeoutController(timeout time.Duration) {
 		case <-ticker.C:
 			log.Printf("%v: received heartbeat timeout tick\n", server.MyID)
 			ticker.Stop()
-			server.broadcastAppendEntries()
+			server.Mutex.Lock()
+			// sometimes it can happen that a queued timer tick arrives
+			// even after timeout is disabled. To prevent such spontaneous ticks
+			// from triggering false broadcasts we use this check here.
+			if server.State == Leader {
+				server.broadcastAppendEntries()
+			}
+			server.Mutex.Unlock()
 			ticker.Reset(timeout)
 		case reset := <-server.HeartbeatTimeoutChan:
 			if reset == true {
