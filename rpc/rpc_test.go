@@ -40,7 +40,7 @@ func Test_CreateRaftServers(t *testing.T) {
 		i := i
 		go func() {
 			server := TestRaft{}
-			manager := rpc.Manager{}
+			manager := rpc.NewManager()
 			err := manager.Start(common.ServerAddress(fmt.Sprintf(":%d", 1234+i)), server)
 			assert.NoError(t, err)
 		}()
@@ -52,7 +52,7 @@ func Test_CreateRaftServers(t *testing.T) {
 func Test_CanConnect(t *testing.T) {
 	// This method tests that we are able to connect to existing raft servers
 	// spawn a test raft server at 1234
-	manager := rpc.Manager{}
+	manager := rpc.NewManager()
 	go func() {
 		server := TestRaft{}
 		err := manager.Start(common.ServerAddress(fmt.Sprintf(":%d", 1234)), server)

@@ -74,3 +74,7 @@ func (store PStore) GetDefault(key []byte, defaultVal []byte) ([]byte, error) {
 	})
 	return val, err
 }
+
+func (d PStore) Close() error {
+	return d.db.Close()
+}
