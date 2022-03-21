@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/common"
 	"go.uber.org/multierr"
@@ -26,14 +27,19 @@ type RaftServer struct {
 	PersistentStore common.PersistentStore
 
 	// Peers
-	MyID  uuid.UUID
-	Peers []common.RPCServer
+	MyID    uuid.UUID
+	Peers   []common.RPCServer
+	Manager common.RPCManager
 
 	// Synchronization primitives
 	Mutex                sync.Mutex
 	ElectionTimeoutChan  chan bool
 	HeartbeatTimeoutChan chan bool
 	ApplyChan            map[int64]chan ApplyMsg
+	StopChan             chan bool
+
+	// Testing primitives
+	Disconnected bool
 }
 
 var _ common.RPCServer = &RaftServer{}
@@ -60,6 +66,7 @@ func NewRaftServer(
 		LogStore:        logStore,
 		PersistentStore: persistentStore,
 		MyID:            me.ID,
+		Manager:         manager,
 	}
 	// Add a zero log entry
 	err := logStore.Store(common.LogEntry{
@@ -90,6 +97,7 @@ func NewRaftServer(
 	newRaftServer.ElectionTimeoutChan = make(chan bool, 10)
 	newRaftServer.HeartbeatTimeoutChan = make(chan bool, 10)
 	newRaftServer.ApplyChan = make(map[int64]chan ApplyMsg)
+	newRaftServer.StopChan = make(chan bool)
 
 	newRaftServer.ElectionTimeoutChan <- true
 	newRaftServer.HeartbeatTimeoutChan <- false
@@ -111,11 +119,17 @@ func (server *RaftServer) GetID() uuid.UUID {
 }
 
 func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
+	if server.Disconnected {
+		return fmt.Errorf("%v is disconnected\n", server.MyID)
+	}
 	//TODO implement me
 	panic("implement me")
 }
 
 func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *common.RequestVoteRPCResult) error {
+	if server.Disconnected {
+		return fmt.Errorf("%v is disconnected\n", server.MyID)
+	}
 	server.Mutex.Lock()
 	defer server.Mutex.Unlock()
 	if args.Term > server.Term {
@@ -145,10 +159,14 @@ func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *commo
 	}
 	if args.LastLogTerm > lastLogEntry.Term {
 		result.VoteGranted = true
+		server.VotedFor = &args.CandidateID
+		setVotedFor(server.PersistentStore, server.VotedFor)
 		return nil
 	}
 	if args.LastLogTerm == lastLogEntry.Term && args.LastLogIndex >= lastLogEntry.Index {
 		result.VoteGranted = true
+		server.VotedFor = &args.CandidateID
+		setVotedFor(server.PersistentStore, server.VotedFor)
 		return nil
 	}
 	result.VoteGranted = false
@@ -156,6 +174,9 @@ func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *commo
 }
 
 func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *common.AppendEntriesRPCResult) error {
+	if server.Disconnected {
+		return fmt.Errorf("%v is disconnected\n", server.MyID)
+	}
 	server.Mutex.Lock()
 	defer server.Mutex.Unlock()
 	switch {
@@ -172,9 +193,6 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		fallthrough
 	case args.Term == server.Term:
 		if server.State != Follower {
-			if server.State == Leader {
-				panic("2 leaders in the same term")
-			}
 			server.convertToFollower()
 		}
 		if server.CurrentLeader == nil || *server.CurrentLeader != args.Leader {
@@ -186,6 +204,39 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		server.ElectionTimeoutChan <- true
 	}
 	return nil
+}
+
+// Stop stops the raft server, it does not guarantee releasing any memory, further any
+// calls to a stopped raft server may block forever (instead of returning error).
+// No method (including Stop) should be called on a stopped raft server.
+func (server *RaftServer) Stop() error {
+	// acquire mutex to prevent any other goroutine from making progress
+	// we will never release this lock
+	server.Mutex.Lock()
+	// close all channels to indicate shutdown to goroutines
+	close(server.StopChan)
+	// ideally we would also shutdown other channels but that may lead to panic in our current design
+	// so we elide it.
+	// Finally, close the resources so that they may be reopened later
+	managerErr := server.Manager.Stop()
+	logErr := server.LogStore.Close()
+	pErr := server.PersistentStore.Close()
+	log.Printf("%v: SHUTDOWN!", server.MyID)
+	return multierr.Combine(managerErr, logErr, pErr)
+}
+
+// Disconnect creates an artificial network partition to disconnect this server from its peer (bi-directional).
+// The partition is artificial in the sense that although the underlying network communications succeed,
+// the implementations themselves are aware of disconnect and respond with a error in such cases.
+// Reconnect can be used to heal the disconnected server.
+func (server *RaftServer) Disconnect() {
+	server.Disconnected = true
+	server.Manager.Disconnect()
+}
+
+func (server *RaftServer) Reconnect() {
+	server.Disconnected = false
+	server.Manager.Reconnect()
 }
 
 func (server *RaftServer) getLastLogEntry() (entry *common.LogEntry, err error) {
@@ -458,6 +509,13 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 	ticker := time.NewTicker(timeoutRandomizer(timeout))
 	for {
 		select {
+		case _, ok := <-server.StopChan:
+			if !ok {
+				// STOP
+				ticker.Stop()
+				return
+			}
+			panic("value should never be sent to stop channel")
 		case <-ticker.C:
 			log.Printf("%v: received election timeout tick\n", server.MyID)
 			ticker.Stop()
@@ -486,10 +544,24 @@ func (server *RaftServer) heartBeatTimeoutController(timeout time.Duration) {
 	ticker := time.NewTicker(timeout)
 	for {
 		select {
+		case _, ok := <-server.StopChan:
+			if !ok {
+				// STOP
+				ticker.Stop()
+				return
+			}
+			panic("value should never be sent to stop channel")
 		case <-ticker.C:
 			log.Printf("%v: received heartbeat timeout tick\n", server.MyID)
 			ticker.Stop()
-			server.broadcastAppendEntries()
+			server.Mutex.Lock()
+			// sometimes it can happen that a queued timer tick arrives
+			// even after timeout is disabled. To prevent such spontaneous ticks
+			// from triggering false broadcasts we use this check here.
+			if server.State == Leader {
+				server.broadcastAppendEntries()
+			}
+			server.Mutex.Unlock()
 			ticker.Reset(timeout)
 		case reset := <-server.HeartbeatTimeoutChan:
 			if reset == true {

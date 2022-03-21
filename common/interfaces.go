@@ -18,6 +18,7 @@ type LogStore interface {
 	Store(entry LogEntry) error
 	Get(index int64) (*LogEntry, error)
 	Length() (int64, error)
+	Close() error
 }
 
 // PersistentStore implementations can be used as general-purpose stores
@@ -26,6 +27,7 @@ type PersistentStore interface {
 	Set(key, value []byte) error
 	Get(key []byte) ([]byte, error)
 	GetDefault(key []byte, defaultVal []byte) ([]byte, error)
+	Close() error
 }
 
 // FSM represents a general finite-state machine which has only a single operation -- Apply.
@@ -49,4 +51,10 @@ type RPCManager interface {
 	// Start only returns error if it fails to start the server.
 	Start(address ServerAddress, server RPCServer) error
 	ConnectToPeer(address ServerAddress, id uuid.UUID) (RPCServer, error)
+	// Stop the RPCManager (permanent)
+	Stop() error
+	// Disconnect disconnects all managed peers
+	Disconnect()
+	// Reconnect can heal the disconnected managed peers
+	Reconnect()
 }
