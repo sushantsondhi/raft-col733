@@ -241,28 +241,41 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		if server.CurrentLeader == nil || *server.CurrentLeader != args.Leader {
 			server.CurrentLeader = &args.Leader
 		}
+
+		// Check if client request present
 		if len(args.Entries) > 0 {
-			if length, err := server.LogStore.Length(); err == nil {
-				if args.PrevLogIndex < length {
-					prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex)
-					if err != nil {
-						return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
-					}
-					if prevLogEntry.Term != args.PrevLogTerm {
-						return fmt.Errorf("Peer Entries are not upto date\n")
-					}
-				} else {
-					return fmt.Errorf("Peer Entries are not upto date\n")
-				}
-			} else {
+			// get the length of logs of the follower
+			var length int64
+			var err error
+			if length, err = server.LogStore.Length(); err != nil {
 				return fmt.Errorf("Unable to get log length: %+v\n", err)
 			}
 
-			if err := server.LogStore.Store(args.Entries[0]); err != nil {
-				return fmt.Errorf("Unable to append Entry: %+v\n", err)
+			if args.PrevLogIndex < length {
+				// Follower has atleast as many log entries as the leader
+				prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex) // Get the previous entry at index where current entry will be appended
+				if err != nil {
+					return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
+				}
+				if prevLogEntry.Term != args.PrevLogTerm {
+					// There is mismatch of log entries between leader and follower
+					result.Success = false
+				} else {
+					// Sever and follower are synced, can append entries
+					if err := server.LogStore.Store(args.Entries[0]); err != nil {
+						return fmt.Errorf("Unable to append Entry: %+v\n", err)
+					}
+					// Entry appended successfully
+					result.Success = true
+				}
+			} else {
+				// Follower is behind the leader
+				result.Success = false
 			}
+		} else {
+			// Heartbeat message
+			result.Success = true
 		}
-		result.Success = true
 		result.Term = server.Term
 		// reset election timeout
 		server.ElectionTimeoutChan <- true

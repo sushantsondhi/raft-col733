@@ -170,38 +170,42 @@ func TestGetAndSetClient(t *testing.T) {
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
-	time.Sleep(2 * time.Second)
-	req := common.ClientRequestRPC{
-		Data: setMarshaller("key1", "val1"),
-	}
-	res := common.ClientRequestRPCResult{}
+	verifyElectionSafetyAndLiveness(t, servers)
 
 	var success bool
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
-	for _, server := range servers {
-		server.ClientRequest(&req, &res)
-		if res.Success {
-			success = true
-			break
-		}
-	}
+	for i := 0; i < 100; i++ {
+		rand.Seed(time.Now().UnixNano())
+		rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
 
-	assert.Truef(t, success, "set failed")
-	assert.Equal(t, res.Error, "")
-	req = common.ClientRequestRPC{
-		Data: getMarshaller("key1"),
-	}
-	res = common.ClientRequestRPCResult{}
-	success = false
-	for _, server := range servers {
-		server.ClientRequest(&req, &res)
-		if res.Success {
-			success = true
-			break
+		req := common.ClientRequestRPC{
+			Data: setMarshaller("key1", "val1"),
 		}
+		res := common.ClientRequestRPCResult{}
+		success = false
+		for _, server := range servers {
+			server.ClientRequest(&req, &res)
+			if res.Success {
+				success = true
+				break
+			}
+		}
+
+		assert.Truef(t, success, "set failed")
+		assert.Equal(t, res.Error, "")
+		req = common.ClientRequestRPC{
+			Data: getMarshaller("key1"),
+		}
+		res = common.ClientRequestRPCResult{}
+		success = false
+		for _, server := range servers {
+			server.ClientRequest(&req, &res)
+			if res.Success {
+				success = true
+				break
+			}
+		}
+		assert.Truef(t, success, "set failed")
+		assert.Equal(t, res.Data, []byte("val1"))
+		assert.Equal(t, res.Error, "")
 	}
-	assert.Truef(t, success, "set failed")
-	assert.Equal(t, res.Data, []byte("val1"))
-	assert.Equal(t, res.Error, "")
 }
