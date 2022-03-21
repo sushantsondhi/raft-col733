@@ -122,9 +122,10 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 	if server.Disconnected {
 		return fmt.Errorf("%v is disconnected\n", server.MyID)
 	}
-	log.Printf("%v received client request", server.MyID)
+	log.Printf("%v received client request\n", server.MyID)
 	server.Mutex.Lock()
 	if server.State == Leader {
+		log.Printf("%v handling client request as leader\n", server.MyID)
 		NewLogEntry := common.LogEntry{
 			Term: server.Term,
 			Data: args.Data,
@@ -146,12 +147,14 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 		server.Mutex.Unlock()
 		server.broadcastAppendEntries()
 		ret := <-server.ApplyChan[NewLogEntry.Index]
-		result.Error = ret.Err.Error()
+
 		result.Data = ret.Bytes
 		if ret.Err != nil {
-			result.Success = true
-		} else {
 			result.Success = false
+			result.Error = ret.Err.Error()
+		} else {
+			result.Success = true
+			result.Error = ""
 		}
 		return nil
 	} else {

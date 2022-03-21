@@ -9,6 +9,7 @@ import (
 	"github.com/sushantsondhi/raft-col733/kvstore"
 	"github.com/sushantsondhi/raft-col733/persistent"
 	"github.com/sushantsondhi/raft-col733/rpc"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,14 +158,14 @@ func TestGetAndSetClient(t *testing.T) {
 		assert.NoError(t, err)
 		return bytes
 	}
-	//getMarshaller := func(key string) []byte {
-	//	bytes, err := json.Marshal(kvstore.Request{
-	//		Type: kvstore.Get,
-	//		Key:  key,
-	//	})
-	//	assert.NoError(t, err)
-	//	return bytes
-	//}
+	getMarshaller := func(key string) []byte {
+		bytes, err := json.Marshal(kvstore.Request{
+			Type: kvstore.Get,
+			Key:  key,
+		})
+		assert.NoError(t, err)
+		return bytes
+	}
 
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
@@ -176,6 +177,8 @@ func TestGetAndSetClient(t *testing.T) {
 	res := common.ClientRequestRPCResult{}
 
 	var success bool
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
 	for _, server := range servers {
 		server.ClientRequest(&req, &res)
 		if res.Success {
@@ -185,5 +188,20 @@ func TestGetAndSetClient(t *testing.T) {
 	}
 
 	assert.Truef(t, success, "set failed")
-
+	assert.Equal(t, res.Error, "")
+	req = common.ClientRequestRPC{
+		Data: getMarshaller("key1"),
+	}
+	res = common.ClientRequestRPCResult{}
+	success = false
+	for _, server := range servers {
+		server.ClientRequest(&req, &res)
+		if res.Success {
+			success = true
+			break
+		}
+	}
+	assert.Truef(t, success, "set failed")
+	assert.Equal(t, res.Data, []byte("val1"))
+	assert.Equal(t, res.Error, "")
 }
