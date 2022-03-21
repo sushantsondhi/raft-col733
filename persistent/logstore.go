@@ -68,6 +68,7 @@ func (d DbLogStore) Get(index int64) (*common.LogEntry, error) {
 	err := d.db.View(func(tx *bolt.Tx) error {
 
 		bucket := tx.Bucket(logsBucketName)
+
 		val := bucket.Get(int64ToBytes(index))
 
 		if val == nil {
