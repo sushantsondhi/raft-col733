@@ -144,12 +144,13 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 		}
 		return nil
 	} else {
-		server.Mutex.Unlock()
 		for _, peer := range server.Peers {
 			if server.CurrentLeader != nil && peer.GetID() == *server.CurrentLeader {
+				server.Mutex.Unlock()
 				return peer.ClientRequest(args, result)
 			}
 		}
+		server.Mutex.Unlock()
 		return fmt.Errorf("Not connected to Leader\n")
 	}
 }
@@ -492,7 +493,7 @@ func (server *RaftServer) commitEntries() {
 		if err != nil {
 			log.Printf("error applying log entry to FSM: :%+v\n", err)
 		}
-		if ch, ok := server.ApplyChan[server.AppliedIndex]; ok {
+		if ch, ok := server.ApplyChan[server.AppliedIndex+1]; ok {
 			ch <- ApplyMsg{
 				Err:   err,
 				Bytes: bytes,
