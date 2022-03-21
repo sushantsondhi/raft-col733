@@ -1,10 +1,12 @@
 package raft
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/sushantsondhi/raft-col733/common"
+	"github.com/sushantsondhi/raft-col733/kvstore"
 	"github.com/sushantsondhi/raft-col733/persistent"
 	"github.com/sushantsondhi/raft-col733/rpc"
 	"os"
@@ -19,7 +21,7 @@ func makeRaftCluster(t *testing.T, configs ...common.ClusterConfig) (servers []*
 		assert.NoError(t, err)
 		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
 		assert.NoError(t, err)
-		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], nil, logstore, pstore, rpc.NewManager())
+		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
 		assert.NotNil(t, raftServer)
 		servers = append(servers, raftServer)
 	}
@@ -41,7 +43,7 @@ func generateClusterConfig(n int) common.ClusterConfig {
 	for i := 0; i < n; i++ {
 		servers = append(servers, common.Server{
 			ID:         uuid.New(),
-			NetAddress: common.ServerAddress(fmt.Sprintf(":%d", 12345+i)),
+			NetAddress: common.ServerAddress(fmt.Sprintf("127.0.0.1:%d", 12345+i)),
 		})
 	}
 	return common.ClusterConfig{
@@ -143,4 +145,45 @@ func Test_ReJoin(t *testing.T) {
 	// now we reconnect 2
 	servers[2].Reconnect()
 	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func TestGetAndSetClient(t *testing.T) {
+	setMarshaller := func(key, val string) []byte {
+		bytes, err := json.Marshal(kvstore.Request{
+			Type: kvstore.Set,
+			Key:  key,
+			Val:  val,
+		})
+		assert.NoError(t, err)
+		return bytes
+	}
+	//getMarshaller := func(key string) []byte {
+	//	bytes, err := json.Marshal(kvstore.Request{
+	//		Type: kvstore.Get,
+	//		Key:  key,
+	//	})
+	//	assert.NoError(t, err)
+	//	return bytes
+	//}
+
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	time.Sleep(2 * time.Second)
+	req := common.ClientRequestRPC{
+		Data: setMarshaller("key1", "val1"),
+	}
+	res := common.ClientRequestRPCResult{}
+
+	var success bool
+	for _, server := range servers {
+		server.ClientRequest(&req, &res)
+		if res.Success {
+			success = true
+			break
+		}
+	}
+
+	assert.Truef(t, success, "set failed")
+
 }
