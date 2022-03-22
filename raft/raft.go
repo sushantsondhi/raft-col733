@@ -122,8 +122,51 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 	if server.Disconnected {
 		return fmt.Errorf("%v is disconnected\n", server.MyID)
 	}
-	//TODO implement me
-	panic("implement me")
+	log.Printf("%v received client request\n", server.MyID)
+	server.Mutex.Lock()
+	if server.State == Leader {
+		log.Printf("%v handling client request as leader\n", server.MyID)
+		NewLogEntry := common.LogEntry{
+			Term: server.Term,
+			Data: args.Data,
+		}
+		if length, err := server.LogStore.Length(); err == nil {
+			NewLogEntry.Index = length
+		} else {
+			server.Mutex.Unlock()
+			result.Success = false
+			return fmt.Errorf("Unable to get logStore length: %+v\n", err)
+		}
+
+		if err := server.LogStore.Store(NewLogEntry); err != nil {
+			server.Mutex.Unlock()
+			result.Success = false
+			return fmt.Errorf("Unable to store entry in leader logstore: %+v\n", err)
+		}
+		server.ApplyChan[NewLogEntry.Index] = make(chan ApplyMsg)
+		server.Mutex.Unlock()
+		server.broadcastAppendEntries()
+		ret := <-server.ApplyChan[NewLogEntry.Index]
+
+		result.Data = ret.Bytes
+		if ret.Err != nil {
+			result.Success = false
+			result.Error = ret.Err.Error()
+		} else {
+			result.Success = true
+			result.Error = ""
+		}
+		return nil
+	} else {
+		for _, peer := range server.Peers {
+			if server.CurrentLeader != nil && peer.GetID() == *server.CurrentLeader {
+				server.Mutex.Unlock()
+				return peer.ClientRequest(args, result)
+			}
+		}
+		server.Mutex.Unlock()
+		return fmt.Errorf("Not connected to Leader\n")
+	}
 }
 
 func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *common.RequestVoteRPCResult) error {
@@ -198,7 +241,41 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		if server.CurrentLeader == nil || *server.CurrentLeader != args.Leader {
 			server.CurrentLeader = &args.Leader
 		}
-		result.Success = true
+
+		// Check if client request present
+		if len(args.Entries) > 0 {
+			// get the length of logs of the follower
+			var length int64
+			var err error
+			if length, err = server.LogStore.Length(); err != nil {
+				return fmt.Errorf("Unable to get log length: %+v\n", err)
+			}
+
+			if args.PrevLogIndex < length {
+				// Follower has atleast as many log entries as the leader
+				prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex) // Get the previous entry at index where current entry will be appended
+				if err != nil {
+					return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
+				}
+				if prevLogEntry.Term != args.PrevLogTerm {
+					// There is mismatch of log entries between leader and follower
+					result.Success = false
+				} else {
+					// Sever and follower are synced, can append entries
+					if err := server.LogStore.Store(args.Entries[0]); err != nil {
+						return fmt.Errorf("Unable to append Entry: %+v\n", err)
+					}
+					// Entry appended successfully
+					result.Success = true
+				}
+			} else {
+				// Follower is behind the leader
+				result.Success = false
+			}
+		} else {
+			// Heartbeat message
+			result.Success = true
+		}
 		result.Term = server.Term
 		// reset election timeout
 		server.ElectionTimeoutChan <- true
@@ -485,7 +562,7 @@ func (server *RaftServer) commitEntries() {
 		if err != nil {
 			log.Printf("error applying log entry to FSM: :%+v\n", err)
 		}
-		if ch, ok := server.ApplyChan[server.AppliedIndex]; ok {
+		if ch, ok := server.ApplyChan[server.AppliedIndex+1]; ok {
 			ch <- ApplyMsg{
 				Err:   err,
 				Bytes: bytes,
