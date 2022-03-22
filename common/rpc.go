@@ -5,8 +5,7 @@ import (
 )
 
 type ClientRequestRPC struct {
-	Data          []byte
-	TransactionId uuid.UUID
+	Data []byte
 }
 
 type ClientRequestRPCResult struct {

@@ -127,9 +127,8 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 	if server.State == Leader {
 		log.Printf("%v handling client request as leader\n", server.MyID)
 		NewLogEntry := common.LogEntry{
-			Term:          server.Term,
-			Data:          args.Data,
-			TransactionId: args.TransactionId,
+			Term: server.Term,
+			Data: args.Data,
 		}
 		if length, err := server.LogStore.Length(); err == nil {
 			NewLogEntry.Index = length
@@ -347,12 +346,6 @@ func (server *RaftServer) convertToFollower() {
 // acquired mutex.	`
 func (server *RaftServer) convertToCandidate() {
 	log.Printf("%v: converting to candidate\n", server.MyID)
-	// TODO: Should not be a panic
-	// If thread running this routine is slow then the an
-	// election timeout may occur before stop=true is put in electionTimeoutChan
-	if server.State == Leader {
-		return
-	}
 	server.State = Candidate
 	server.CurrentLeader = nil
 	// TODO: this should be in a transaction
@@ -615,7 +608,11 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 			log.Printf("%v: received election timeout tick\n", server.MyID)
 			ticker.Stop()
 			server.Mutex.Lock()
-			server.convertToCandidate()
+			if server.State != Leader {
+				server.convertToCandidate()
+			} else {
+				log.Printf("%v: discarded false election timeout\n", server.MyID)
+			}
 			server.Mutex.Unlock()
 			ticker.Reset(timeoutRandomizer(timeout))
 		case reset := <-server.ElectionTimeoutChan:

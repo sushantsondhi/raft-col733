@@ -151,17 +151,19 @@ func Test_ReJoin(t *testing.T) {
 func TestGetAndSetClient(t *testing.T) {
 	setMarshaller := func(key, val string) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
-			Type: kvstore.Set,
-			Key:  key,
-			Val:  val,
+			Type:          kvstore.Set,
+			Key:           key,
+			Val:           val,
+			TransactionId: uuid.New(),
 		})
 		assert.NoError(t, err)
 		return bytes
 	}
 	getMarshaller := func(key string) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
-			Type: kvstore.Get,
-			Key:  key,
+			Type:          kvstore.Get,
+			Key:           key,
+			TransactionId: uuid.New(),
 		})
 		assert.NoError(t, err)
 		return bytes
@@ -173,17 +175,21 @@ func TestGetAndSetClient(t *testing.T) {
 	verifyElectionSafetyAndLiveness(t, servers)
 
 	var success bool
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 1000; i++ {
 		rand.Seed(time.Now().UnixNano())
 		rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
 
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("val%d", i)
+
 		req := common.ClientRequestRPC{
-			Data: setMarshaller("key1", "val1"),
+			Data: setMarshaller(key, val),
 		}
 		res := common.ClientRequestRPCResult{}
 		success = false
 		for _, server := range servers {
-			server.ClientRequest(&req, &res)
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err)
 			if res.Success {
 				success = true
 				break
@@ -193,19 +199,20 @@ func TestGetAndSetClient(t *testing.T) {
 		assert.Truef(t, success, "set failed")
 		assert.Equal(t, res.Error, "")
 		req = common.ClientRequestRPC{
-			Data: getMarshaller("key1"),
+			Data: getMarshaller(key),
 		}
 		res = common.ClientRequestRPCResult{}
 		success = false
 		for _, server := range servers {
-			server.ClientRequest(&req, &res)
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err)
 			if res.Success {
 				success = true
 				break
 			}
 		}
 		assert.Truef(t, success, "set failed")
-		assert.Equal(t, res.Data, []byte("val1"))
+		assert.Equal(t, res.Data, []byte(val))
 		assert.Equal(t, res.Error, "")
 	}
 }
