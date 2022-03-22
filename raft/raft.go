@@ -40,7 +40,6 @@ type RaftServer struct {
 
 	// Testing primitives
 	Disconnected bool
-	Leaders      map[int64]map[uint32]bool
 }
 
 var _ common.RPCServer = &RaftServer{}
@@ -68,10 +67,6 @@ func NewRaftServer(
 		PersistentStore: persistentStore,
 		MyID:            me.ID,
 		Manager:         manager,
-
-		// Testing primitives
-		Disconnected: false,
-		Leaders:      make(map[int64]map[uint32]bool),
 	}
 	// Add a zero log entry
 	err := logStore.Store(common.LogEntry{
@@ -288,10 +283,6 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		result.Term = server.Term
 		// reset election timeout
 		server.ElectionTimeoutChan <- true
-		if server.Leaders[server.Term] == nil {
-			server.Leaders[server.Term] = make(map[uint32]bool)
-		}
-		server.Leaders[server.Term][server.CurrentLeader.ID()] = true
 	}
 	return nil
 }
@@ -468,9 +459,6 @@ func (server *RaftServer) convertToLeader(term int64) {
 // broadcastAppendEntries sends append entry RPCs to all servers and waits for their response.
 // It also updates nextIndex and matchIndex values.
 func (server *RaftServer) broadcastAppendEntries() {
-	if server.Disconnected {
-		return
-	}
 	log.Printf("%v: broadcasting append entries ...\n", server.MyID)
 	for _, peer := range server.Peers {
 		peer := peer

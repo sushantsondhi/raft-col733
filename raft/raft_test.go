@@ -75,6 +75,24 @@ func verifyElectionSafetyAndLiveness(t *testing.T, servers []*RaftServer) {
 	assert.Truef(t, liveness, "election liveness not satisfied (no leader elected ever)")
 }
 
+func verifySafety(t *testing.T, servers []*RaftServer) {
+	for i := 0; i < 20; i++ {
+		leaders := make(map[int64][]uuid.UUID)
+		for _, server := range servers {
+			server.Mutex.Lock()
+			if server.State == Leader {
+				leaders[server.Term] = append(leaders[server.Term], server.GetID())
+			}
+			server.Mutex.Unlock()
+		}
+		for term, ldrs := range leaders {
+			fmt.Printf("Term = %d, ldrs = %v\n", term, ldrs)
+			assert.LessOrEqualf(t, len(ldrs), 1, "multiple leaders for term %d", term)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func Test_SimpleElection(t *testing.T) {
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
@@ -114,6 +132,9 @@ func Test_ReElection(t *testing.T) {
 	// now reconnect server 1 to cluster
 	// it will convert to follower with same term
 	servers[0].Reconnect()
+
+	time.Sleep(3 * time.Second)
+
 	verifyElectionSafetyAndLiveness(t, servers)
 	assert.Equal(t, servers[0].State, Follower)
 	assert.Equal(t, servers[0].Term, servers[1].Term)
@@ -215,4 +236,37 @@ func TestGetAndSetClient(t *testing.T) {
 		assert.Equal(t, res.Data, []byte(val))
 		assert.Equal(t, res.Error, "")
 	}
+}
+
+func Test_ElectionSafety(t *testing.T) {
+
+	t.Cleanup(cleanupDbFiles)
+
+	clusterConfig := generateClusterConfig(5)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig, clusterConfig, clusterConfig)
+
+	var disconnectedQueue []int
+
+	for itr := 0; itr < 100; itr++ {
+		if itr%2 == 0 {
+			for serverIndex := range disconnectedQueue {
+				servers[serverIndex].Reconnect()
+			}
+			disconnectedQueue = disconnectedQueue[len(disconnectedQueue):]
+		} else {
+			var idx1, idx2 int
+			idx1 = rand.Intn(5)
+			idx2 = rand.Intn(5)
+			for idx2 == idx1 {
+				idx2 = rand.Intn(5)
+			}
+			servers[idx1].Disconnect()
+			servers[idx2].Disconnect()
+			disconnectedQueue = append(disconnectedQueue, idx1)
+			disconnectedQueue = append(disconnectedQueue, idx2)
+		}
+		go verifySafety(t, servers)
+		time.Sleep(time.Second)
+	}
+
 }
