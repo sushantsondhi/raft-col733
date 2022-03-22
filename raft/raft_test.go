@@ -246,9 +246,9 @@ func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64) 
 		}
 		res := common.ClientRequestRPCResult{}
 		err := server.ClientRequest(&req, &res)
-		assert.NoError(t, err)
-		assert.Truef(t, res.Success, "set failed")
-		assert.Equal(t, res.Error, "")
+		assert.NoError(t, err, "Client request got error")
+		assert.Truef(t, res.Success, "set request failed")
+		assert.Equal(t, res.Error, "", "Error in setting value")
 	}
 }
 
@@ -262,10 +262,16 @@ func Test_LaggingFollower(t *testing.T) {
 	// Now, reconnect C. No more client requests will be sent.
 	// We will verify that eventually C also has all the logs (even without any further client requests).
 	t.Cleanup(cleanupDbFiles)
-	clusterConfig := generateClusterConfig(3)
-	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
+	clusterConfig2.ElectionTimeout = time.Second
+	clusterConfig3.ElectionTimeout = time.Second
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
 	verifyElectionSafetyAndLiveness(t, servers)
-	assert.Equal(t, servers[0].State, Leader)
+	assert.Equal(t, Leader, servers[0].State, "server[0] not elected as leader")
 	// server 0 elected as leader,
 	// Send some client requests
 	sendClientSetRequests(t, servers[0], 10)
@@ -282,7 +288,7 @@ func Test_LaggingFollower(t *testing.T) {
 		lenLogDisconnected, _ := servers[2].LogStore.Length()
 		if lenLogDisconnected == lenLogLeader {
 			lastLogDisconnected, _ := servers[2].LogStore.Get(lenLogDisconnected - 1)
-			assert.Equal(t, lastLogLeader.Data, lastLogDisconnected.Data, "Last log entry doesn't match")
+			assert.Equal(t, lastLogDisconnected.Data, lastLogLeader.Data, "Last log entry doesn't match")
 			servers[2].Mutex.Unlock()
 			break
 		}
