@@ -3,6 +3,7 @@ package kvstore
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/common"
 )
 
@@ -14,8 +15,9 @@ const (
 )
 
 type Request struct {
-	Type     RequestType
-	Key, Val string
+	Type          RequestType
+	Key, Val      string
+	TransactionId uuid.UUID
 }
 
 // KeyValFSM is the implementation of the raft.FSM interface
@@ -23,14 +25,16 @@ type Request struct {
 // in-memory because they can be reliably reconstructed
 // on server restarts by simply replaying the log
 type KeyValFSM struct {
-	store map[string]string
+	store               map[string]string
+	appliedTransactions map[uuid.UUID][]byte // map of (transId, returned value)
 }
 
 var _ common.FSM = &KeyValFSM{}
 
 func NewKeyValFSM() *KeyValFSM {
 	return &KeyValFSM{
-		store: make(map[string]string),
+		store:               make(map[string]string),
+		appliedTransactions: make(map[uuid.UUID][]byte),
 	}
 }
 
@@ -41,12 +45,22 @@ func (fsm *KeyValFSM) Apply(entry common.LogEntry) ([]byte, error) {
 	}
 	switch request.Type {
 	case Get:
+		if val, ok := fsm.appliedTransactions[request.TransactionId]; ok {
+			return val, nil
+		}
 		if val, ok := fsm.store[request.Key]; ok {
+			fsm.appliedTransactions[request.TransactionId] = []byte(val)
 			return []byte(val), nil
 		} else {
+			fsm.appliedTransactions[request.TransactionId] = nil
 			return nil, fmt.Errorf("key does not exist")
 		}
+
 	case Set:
+		if _, ok := fsm.appliedTransactions[request.TransactionId]; ok {
+			return nil, nil
+		}
+		fsm.appliedTransactions[request.TransactionId] = nil
 		fsm.store[request.Key] = request.Val
 		return nil, nil
 	default:

@@ -49,6 +49,7 @@ func (manager *Manager) Start(address common.ServerAddress, server common.RPCSer
 	}
 }
 
+// ConnectToPeer: Lazy connection
 func (manager *Manager) ConnectToPeer(address common.ServerAddress, id uuid.UUID) (common.RPCServer, error) {
 	peer := NewPeer(address, id)
 	manager.peers = append(manager.peers, peer)
