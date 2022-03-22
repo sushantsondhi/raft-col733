@@ -148,7 +148,7 @@ func Test_ReJoin(t *testing.T) {
 	verifyElectionSafetyAndLiveness(t, servers)
 }
 
-func TestGetAndSetClient(t *testing.T) {
+func jsonHelpers(t *testing.T) (func(key, val string) []byte, func(key string) []byte) {
 	setMarshaller := func(key, val string) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
 			Type:          kvstore.Set,
@@ -159,6 +159,7 @@ func TestGetAndSetClient(t *testing.T) {
 		assert.NoError(t, err)
 		return bytes
 	}
+
 	getMarshaller := func(key string) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
 			Type:          kvstore.Get,
@@ -168,7 +169,11 @@ func TestGetAndSetClient(t *testing.T) {
 		assert.NoError(t, err)
 		return bytes
 	}
+	return setMarshaller, getMarshaller
+}
 
+func TestGetAndSetClient(t *testing.T) {
+	setMarshaller, getMarshaller := jsonHelpers(t)
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
@@ -230,6 +235,23 @@ func Test_LogReplayability(t *testing.T) {
 	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
 }
 
+func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64) {
+	setMarshaller, _ := jsonHelpers(t)
+	for i := int64(0); i < numRequests; i++ {
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("val%d", i)
+
+		req := common.ClientRequestRPC{
+			Data: setMarshaller(key, val),
+		}
+		res := common.ClientRequestRPCResult{}
+		err := server.ClientRequest(&req, &res)
+		assert.NoError(t, err)
+		assert.Truef(t, res.Success, "set failed")
+		assert.Equal(t, res.Error, "")
+	}
+}
+
 func Test_LaggingFollower(t *testing.T) {
 	// This test verifies that a lagging (disconnected) follower will eventually be brought up to speed
 	// in our implementation (correct raft behaviour).
@@ -239,6 +261,34 @@ func Test_LaggingFollower(t *testing.T) {
 	// Send multiple write/read requests to A or B.
 	// Now, reconnect C. No more client requests will be sent.
 	// We will verify that eventually C also has all the logs (even without any further client requests).
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+	// server 0 elected as leader,
+	// Send some client requests
+	sendClientSetRequests(t, servers[0], 10)
+	//Disconnecting server 2
+	servers[2].Disconnect()
+	//Sending more client requests
+	sendClientSetRequests(t, servers[0], 100)
+	//Reconnect Server 2
+	servers[2].Reconnect()
+	lenLogLeader, _ := servers[0].LogStore.Length()
+	lastLogLeader, _ := servers[0].LogStore.Get(lenLogLeader - 1)
+	for {
+		servers[2].Mutex.Lock()
+		lenLogDisconnected, _ := servers[2].LogStore.Length()
+		if lenLogDisconnected == lenLogLeader {
+			lastLogDisconnected, _ := servers[2].LogStore.Get(lenLogDisconnected - 1)
+			assert.Equal(t, lastLogLeader.Data, lastLogDisconnected.Data, "Last log entry doesn't match")
+			servers[2].Mutex.Unlock()
+			break
+		}
+		servers[2].Mutex.Unlock()
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func Test_LeaderCompleteness(t *testing.T) {
