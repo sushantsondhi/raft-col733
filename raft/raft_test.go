@@ -363,7 +363,6 @@ func Test_LaggingFollower(t *testing.T) {
 	clusterConfig2 := clusterConfig1
 	clusterConfig3 := clusterConfig1
 
-	// TODO: Find actual leader instead of this
 	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
 	clusterConfig2.ElectionTimeout = time.Second
 	clusterConfig3.ElectionTimeout = time.Second
@@ -418,7 +417,6 @@ func Test_LeaderCompleteness(t *testing.T) {
 		LogTerms                 [][]int
 	}
 
-	// TODO: Add more tests and make functions for easy initialization
 	testLog1 := initialLogTerms{
 		ExpectedFirstLeaderIndex: 0,
 		LogTerms: [][]int{
@@ -457,9 +455,24 @@ func Test_LeaderCompleteness(t *testing.T) {
 		servers = append(servers, raftServer)
 	}
 
+	var leaders []uuid.UUID
+
+	go func() {
+		for {
+			for _, server := range servers {
+				server.Mutex.Lock()
+				if server.State == Leader {
+					leaders = append(leaders, server.GetID())
+				}
+				server.Mutex.Unlock()
+			}
+		}
+	}()
+
 	verifyElectionSafetyAndLiveness(t, servers)
 	waitForLogsToMatch(t, servers, 100)
-	assert.Equal(t, servers[testLog1.ExpectedFirstLeaderIndex].State, Leader) // TODO: check server1 is **first** leader.
+	assert.Greater(t, len(leaders), 0)
+	assert.Equal(t, servers[testLog1.ExpectedFirstLeaderIndex].GetID(), leaders[0])
 	checkEqualLogs(t, servers)
 	l, err := servers[0].LogStore.Length()
 	assert.NoError(t, err)
