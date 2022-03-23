@@ -238,6 +238,74 @@ func TestGetAndSetClient(t *testing.T) {
 	}
 }
 
+
+func Test_LogReplayability(t *testing.T) {
+	// This test verifies that a restarted raft server is able to re-construct its state
+	// by simply replaying the logs on its FSM.
+	// It will also weakly test our persistence guarantees.
+	// We start with a simple cluster of 3 servers - A, B & C. Initially the FSM starts empty F_0.
+	// The client sends multiple read/write requests to the cluster so that the A's FSM state is now F_1.
+	// Now we kill the server A by permanently stopping it.
+	// We then respawn the server A.
+	// We will now verify that -
+	//  1. A is elected as the leader eventually (otherwise we are not persisting term number properly).
+	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
+}
+
+func Test_LaggingFollower(t *testing.T) {
+	// This test verifies that a lagging (disconnected) follower will eventually be brought up to speed
+	// in our implementation (correct raft behaviour).
+	// We start with a cluster of 3 servers A, B & C.
+	// Wait for first election to complete, WLOG assume A is elected leader.
+	// Now, we will disconnect C (network partition).
+	// Send multiple write/read requests to A or B.
+	// Now, reconnect C. No more client requests will be sent.
+	// We will verify that eventually C also has all the logs (even without any further client requests).
+}
+
+func Test_LeaderCompleteness(t *testing.T) {
+	// This test verifies that our implementation obeys the leader completeness property.
+	// To verify this we spin up a cluster of 3 raft servers but with pre-filled log stores
+	// in a manner so that -
+	// Server 1 has the following logs (term numbers in the index order):
+	// 		1 1 2 2 3 3 4 4
+	// Server 2 has the following logs (term numbers in the index order):
+	// 		1 1 2 2 3 3
+	// Server 3 has the following logs (term numbers in the index order):
+	// 		1 1 2 4
+	// (Note that terms of all the servers will have to be initialized with 4)
+	// We will then verify that -
+	// 1. Server 1 is _eventually_ elected as the _first_ leader (possibly after multiple failed election rounds)
+	// 2. Server 1 _eventually_ forces its logs upon others overwriting them if needed. At the end
+	//    all 3 servers should have all the logs in the exact same order as server 1.
+}
+
+func Test_CommitDurability(t *testing.T) {
+	// This test verifies that if an entry is committed, it is durable even if committing server crashes.
+	// To verify this we spin up a cluster of 3 raft servers A, B & C.
+	// Initially C is disconnected (network partitioned).
+	// We assume WLOG that A is elected as leader in the first election (swap A & B otherwise).
+	// A *write* client request is sent to C. It should fail.
+	// Same request is then sent to B. It should succeed.
+	// Now the log must be replicated and committed at both A & B.
+	// We bring down A (by permanently stopping it), and then reconnect C to cluster so that now
+	// we have only B & C in the cluster.
+	// A *read* client request is sent to C which attempts to read the value written by previous request (on A),
+	// verify that it succeeds and the read value is anticipated.
+}
+
+func Test_OldTermsNotCommitted(t *testing.T) {
+	// This test verifies that our implementation (correctly) does not commit old terms directly.
+	// We will spawn 3 servers with initial term of 2 and following pre-filled log stores respectively -
+	// Server 1:	1
+	// Server 2:	1
+	// Server 3:	1 2
+	// All the logs should be write requests.
+	// Now we will verify that
+	// 1. Server 3 is elected as the first leader (for a term that is greater than 2)
+	// 2. Even after many seconds the commit index of all the 3 servers stays at zero.
+	// 3. After initiating a read request, the read succeeds and the commit index is also properly updated.
+}
 func Test_ElectionSafety(t *testing.T) {
 
 	t.Cleanup(cleanupDbFiles)
@@ -268,5 +336,4 @@ func Test_ElectionSafety(t *testing.T) {
 		go verifySafety(t, servers)
 		time.Sleep(time.Second)
 	}
-
 }
