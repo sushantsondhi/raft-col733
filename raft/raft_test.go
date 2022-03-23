@@ -501,9 +501,10 @@ func Test_LeaderCompleteness(t *testing.T) {
 		}
 
 		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
-		setTerm(pstore, int64(testLog1.LogTerms[i][len(testLog1.LogTerms[i])-1]))
+		setTerm(pstore, 4)
 		assert.NoError(t, err)
 		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
+		fmt.Printf("Raftserver %v started\n", raftServer.MyID)
 		assert.NotNil(t, raftServer)
 		servers = append(servers, raftServer)
 	}
