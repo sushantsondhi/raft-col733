@@ -21,11 +21,11 @@ type Request struct {
 }
 
 // KeyValFSM is the implementation of the raft.FSM interface
-// for the key-value store. We store the key value pairs
+// for the key-value Store. We Store the key value pairs
 // in-memory because they can be reliably reconstructed
 // on server restarts by simply replaying the log
 type KeyValFSM struct {
-	store               map[string]string
+	Store               map[string]string
 	appliedTransactions map[uuid.UUID][]byte // map of (transId, returned value)
 }
 
@@ -33,7 +33,7 @@ var _ common.FSM = &KeyValFSM{}
 
 func NewKeyValFSM() *KeyValFSM {
 	return &KeyValFSM{
-		store:               make(map[string]string),
+		Store:               make(map[string]string),
 		appliedTransactions: make(map[uuid.UUID][]byte),
 	}
 }
@@ -48,7 +48,7 @@ func (fsm *KeyValFSM) Apply(entry common.LogEntry) ([]byte, error) {
 		if val, ok := fsm.appliedTransactions[request.TransactionId]; ok {
 			return val, nil
 		}
-		if val, ok := fsm.store[request.Key]; ok {
+		if val, ok := fsm.Store[request.Key]; ok {
 			fsm.appliedTransactions[request.TransactionId] = []byte(val)
 			return []byte(val), nil
 		} else {
@@ -61,7 +61,7 @@ func (fsm *KeyValFSM) Apply(entry common.LogEntry) ([]byte, error) {
 			return nil, nil
 		}
 		fsm.appliedTransactions[request.TransactionId] = nil
-		fsm.store[request.Key] = request.Val
+		fsm.Store[request.Key] = request.Val
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("invalid request type")

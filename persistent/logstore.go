@@ -83,6 +83,27 @@ func (d DbLogStore) Get(index int64) (*common.LogEntry, error) {
 
 }
 
+func (d DbLogStore) GetLast() (*common.LogEntry, error) {
+	var entry common.LogEntry
+
+	err := d.db.View(func(tx *bolt.Tx) error {
+
+		bucket := tx.Bucket(logsBucketName)
+		logLength := int64(tx.Bucket(logsBucketName).Stats().KeyN)
+		val := bucket.Get(int64ToBytes(logLength - 1))
+
+		if val == nil {
+			return errors.New("[Get]: index doesn't exist")
+		}
+		var err error
+		entry, err = DecodeToLogEntry(val)
+		return err
+	})
+
+	return &entry, err
+
+}
+
 func (d DbLogStore) Length() (int64, error) {
 
 	var logLength int64

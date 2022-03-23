@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -148,13 +150,13 @@ func Test_ReJoin(t *testing.T) {
 	verifyElectionSafetyAndLiveness(t, servers)
 }
 
-func jsonHelpers(t *testing.T) (func(key, val string) []byte, func(key string) []byte) {
-	setMarshaller := func(key, val string) []byte {
+func jsonHelpers(t *testing.T) (func(key, val string, transactionId uuid.UUID) []byte, func(key string) []byte) {
+	setMarshaller := func(key, val string, transactionId uuid.UUID) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
 			Type:          kvstore.Set,
 			Key:           key,
 			Val:           val,
-			TransactionId: uuid.New(),
+			TransactionId: transactionId,
 		})
 		assert.NoError(t, err)
 		return bytes
@@ -188,7 +190,7 @@ func TestGetAndSetClient(t *testing.T) {
 		val := fmt.Sprintf("val%d", i)
 
 		req := common.ClientRequestRPC{
-			Data: setMarshaller(key, val),
+			Data: setMarshaller(key, val, uuid.New()),
 		}
 		res := common.ClientRequestRPCResult{}
 		success = false
@@ -235,21 +237,116 @@ func Test_LogReplayability(t *testing.T) {
 	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
 }
 
-func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64) {
-	setMarshaller, _ := jsonHelpers(t)
-	for i := int64(0); i < numRequests; i++ {
-		key := fmt.Sprintf("key%d", i)
-		val := fmt.Sprintf("val%d", i)
+// Sends concurrent requests
+func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, waitToFinish bool) {
 
-		req := common.ClientRequestRPC{
-			Data: setMarshaller(key, val),
-		}
-		res := common.ClientRequestRPCResult{}
-		err := server.ClientRequest(&req, &res)
-		assert.NoError(t, err, "Client request got error")
-		assert.Truef(t, res.Success, "set request failed")
-		assert.Equal(t, res.Error, "", "Error in setting value")
+	setMarshaller, _ := jsonHelpers(t)
+	var wg sync.WaitGroup
+
+	for i := int64(0); i < numRequests; i++ {
+		wg.Add(1)
+		reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
+		// statements might have unexpected values
+		go func(wg *sync.WaitGroup) {
+			defer wg.Done()
+			key := fmt.Sprintf("key%d", reqNumber)
+			val := fmt.Sprintf("val%d", reqNumber)
+
+			req := common.ClientRequestRPC{
+				Data: setMarshaller(key, val, uuid.New()),
+			}
+			res := common.ClientRequestRPCResult{}
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err, "Client request got error")
+			assert.Truef(t, res.Success, "set request failed")
+			assert.Equal(t, res.Error, "", "Error in setting value")
+		}(&wg)
 	}
+
+	if waitToFinish {
+		wg.Wait()
+	}
+}
+
+// Waits for all raft servers to match up
+// Should be used after all client requests have returned
+func waitForLogsToMatch(t *testing.T, servers []*RaftServer, waitTimeSeconds int) {
+
+	var success bool
+
+	for itr := 0; itr < waitTimeSeconds; itr++ {
+
+		for _, server := range servers {
+			server.Mutex.Lock()
+		}
+
+		var leader *RaftServer = nil
+
+		for _, server := range servers {
+			if server.State == Leader {
+				leader = server
+			}
+		}
+
+		if leader == nil {
+			for _, server := range servers {
+				server.Mutex.Unlock()
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+
+		leaderLastEntry, err := leader.LogStore.GetLast()
+		assert.NoError(t, err)
+
+		matched := true
+		for _, server := range servers {
+			lastEntry, err := server.LogStore.GetLast()
+			assert.NoError(t, err)
+			check := leaderLastEntry.Term == lastEntry.Term
+			check = check && (leaderLastEntry.Index == lastEntry.Index)
+			check = check && (bytes.Compare(leaderLastEntry.Data, lastEntry.Data) == 0)
+			if !check {
+				matched = false
+			}
+		}
+
+		for _, server := range servers {
+			server.Mutex.Unlock()
+		}
+
+		if matched {
+			success = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
+	assert.Truef(t, success, "servers took too long to match up.")
+
+}
+
+func checkEqualLogs(t *testing.T, servers []*RaftServer) {
+	logLength, err := servers[0].LogStore.Length()
+	assert.NoError(t, err)
+	for _, server := range servers[1:] {
+		l, err := server.LogStore.Length()
+		assert.NoError(t, err)
+		assert.Equal(t, logLength, l)
+	}
+
+	for _, server := range servers[1:] {
+		for index := 0; index < int(logLength); index++ {
+			entry1, err := server.LogStore.Get(int64(index))
+			assert.NoError(t, err)
+			entry2, err := server.LogStore.Get(int64(index))
+			assert.NoError(t, err)
+			assert.Equal(t, entry1.Term, entry2.Term, "index %d does not match", index)
+			assert.Equal(t, entry1.Index, entry2.Index, "index %d does not match", index)
+			assert.Equal(t, entry1.Data, entry2.Data, "index %d does not match", index)
+		}
+	}
+
 }
 
 func Test_LaggingFollower(t *testing.T) {
@@ -265,6 +362,8 @@ func Test_LaggingFollower(t *testing.T) {
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
 	clusterConfig3 := clusterConfig1
+
+	// TODO: Find actual leader instead of this
 	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
 	clusterConfig2.ElectionTimeout = time.Second
 	clusterConfig3.ElectionTimeout = time.Second
@@ -274,27 +373,23 @@ func Test_LaggingFollower(t *testing.T) {
 	assert.Equal(t, Leader, servers[0].State, "server[0] not elected as leader")
 	// server 0 elected as leader,
 	// Send some client requests
-	sendClientSetRequests(t, servers[0], 10)
+	sendClientSetRequests(t, servers[0], 10, true)
 	//Disconnecting server 2
 	servers[2].Disconnect()
 	//Sending more client requests
-	sendClientSetRequests(t, servers[0], 100)
+	sendClientSetRequests(t, servers[0], 100, true)
 	//Reconnect Server 2
 	servers[2].Reconnect()
-	lenLogLeader, _ := servers[0].LogStore.Length()
-	lastLogLeader, _ := servers[0].LogStore.Get(lenLogLeader - 1)
-	for {
-		servers[2].Mutex.Lock()
-		lenLogDisconnected, _ := servers[2].LogStore.Length()
-		if lenLogDisconnected == lenLogLeader {
-			lastLogDisconnected, _ := servers[2].LogStore.Get(lenLogDisconnected - 1)
-			assert.Equal(t, lastLogDisconnected.Data, lastLogLeader.Data, "Last log entry doesn't match")
-			servers[2].Mutex.Unlock()
-			break
-		}
-		servers[2].Mutex.Unlock()
-		time.Sleep(100 * time.Millisecond)
-	}
+
+	time.Sleep(time.Second)
+	assert.True(t, servers[0].State == Leader || servers[1].State == Leader)
+	waitForLogsToMatch(t, servers, 600)
+	checkEqualLogs(t, servers)
+
+	l, err := servers[0].LogStore.Length()
+	assert.NoError(t, err)
+	fmt.Printf("******* %d\n", l)
+
 }
 
 func Test_LeaderCompleteness(t *testing.T) {
@@ -312,6 +407,64 @@ func Test_LeaderCompleteness(t *testing.T) {
 	// 1. Server 1 is _eventually_ elected as the _first_ leader (possibly after multiple failed election rounds)
 	// 2. Server 1 _eventually_ forces its logs upon others overwriting them if needed. At the end
 	//    all 3 servers should have all the logs in the exact same order as server 1.
+
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+
+	type initialLogTerms struct {
+		ExpectedFirstLeaderIndex int
+		LogTerms                 [][]int
+	}
+
+	// TODO: Add more tests and make functions for easy initialization
+	testLog1 := initialLogTerms{
+		ExpectedFirstLeaderIndex: 0,
+		LogTerms: [][]int{
+			{1, 1, 2, 2, 3, 4, 4},
+			{1, 1, 2, 2, 3, 3},
+			{1, 1, 2, 4},
+		},
+	}
+
+	configs := []common.ClusterConfig{clusterConfig1, clusterConfig2, clusterConfig3}
+
+	var servers []*RaftServer
+
+	for i := 0; i < len(configs); i++ {
+		logstore, err := persistent.CreateDbLogStore(fmt.Sprintf("logstore-%v.db", configs[i].Cluster[i].ID))
+		assert.NoError(t, err)
+
+		err = logstore.Store(common.LogEntry{
+			Index: 0,
+		})
+		assert.NoError(t, err)
+
+		for index, term := range testLog1.LogTerms[i] {
+			err := logstore.Store(common.LogEntry{
+				Index: int64(index + 1), // Careful about index
+				Term:  int64(term),
+				Data:  nil,
+			})
+			assert.NoError(t, err)
+		}
+
+		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
+		assert.NoError(t, err)
+		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
+		assert.NotNil(t, raftServer)
+		servers = append(servers, raftServer)
+	}
+
+	verifyElectionSafetyAndLiveness(t, servers)
+	waitForLogsToMatch(t, servers, 100)
+	assert.Equal(t, servers[testLog1.ExpectedFirstLeaderIndex].State, Leader) // TODO: check server1 is **first** leader.
+	checkEqualLogs(t, servers)
+	l, err := servers[0].LogStore.Length()
+	assert.NoError(t, err)
+	fmt.Printf("******* %d\n", l)
+
 }
 
 func Test_CommitDurability(t *testing.T) {
