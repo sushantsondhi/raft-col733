@@ -387,6 +387,18 @@ func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 
 }
 
+func Test_SimpleLogStoreAndFSMCheck(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers)
+	sendClientSetRequests(t, servers[0], 10, true)
+	waitForLogsToMatch(t, servers, 20)
+	checkEqualLogs(t, servers)
+	time.Sleep(1 * time.Second)
+	checkEqualFSM(t, servers, 10)
+}
+
 func Test_LaggingFollower(t *testing.T) {
 	// This test verifies that a lagging (disconnected) follower will eventually be brought up to speed
 	// in our implementation (correct raft behaviour).
