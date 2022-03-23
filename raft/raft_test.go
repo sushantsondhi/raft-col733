@@ -258,7 +258,6 @@ func Test_LogReplayability(t *testing.T) {
 	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
 }
 
-
 // Sends concurrent requests
 func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, waitToFinish bool) {
 
@@ -348,6 +347,23 @@ func waitForLogsToMatch(t *testing.T, servers []*RaftServer, waitTimeSeconds int
 
 }
 
+func checkEqualFSM(t *testing.T, servers []*RaftServer, numKeys int64) {
+	_, getMarshaller := jsonHelpers(t)
+	for _, server := range servers[1:] {
+		for index := int64(0); index < numKeys; index++ {
+			newLogEntry := common.LogEntry{
+				Data: getMarshaller(fmt.Sprintf("key%d", index)),
+			}
+			entry1, err := servers[0].FSM.Apply(newLogEntry)
+			assert.NoError(t, err)
+			entry2, err := server.FSM.Apply(newLogEntry)
+			assert.NoError(t, err)
+			assert.Equal(t, entry1, entry2, "value at key: key%d does not match", index)
+		}
+	}
+
+}
+
 func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 	logLength, err := servers[0].LogStore.Length()
 	assert.NoError(t, err)
@@ -359,7 +375,7 @@ func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 
 	for _, server := range servers[1:] {
 		for index := 0; index < int(logLength); index++ {
-			entry1, err := server.LogStore.Get(int64(index))
+			entry1, err := servers[0].LogStore.Get(int64(index))
 			assert.NoError(t, err)
 			entry2, err := server.LogStore.Get(int64(index))
 			assert.NoError(t, err)
@@ -405,8 +421,9 @@ func Test_LaggingFollower(t *testing.T) {
 
 	time.Sleep(time.Second)
 	assert.True(t, servers[0].State == Leader || servers[1].State == Leader)
-	waitForLogsToMatch(t, servers, 600)
+	waitForLogsToMatch(t, servers, 20)
 	checkEqualLogs(t, servers)
+	checkEqualFSM(t, servers, 100)
 
 	l, err := servers[0].LogStore.Length()
 	assert.NoError(t, err)
@@ -558,4 +575,3 @@ func Test_ElectionSafety(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 }
-
