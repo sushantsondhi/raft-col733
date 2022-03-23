@@ -77,6 +77,24 @@ func verifyElectionSafetyAndLiveness(t *testing.T, servers []*RaftServer) {
 	assert.Truef(t, liveness, "election liveness not satisfied (no leader elected ever)")
 }
 
+func verifySafety(t *testing.T, servers []*RaftServer) {
+	for i := 0; i < 20; i++ {
+		leaders := make(map[int64][]uuid.UUID)
+		for _, server := range servers {
+			server.Mutex.Lock()
+			if server.State == Leader {
+				leaders[server.Term] = append(leaders[server.Term], server.GetID())
+			}
+			server.Mutex.Unlock()
+		}
+		for term, ldrs := range leaders {
+			fmt.Printf("Term = %d, ldrs = %v\n", term, ldrs)
+			assert.LessOrEqualf(t, len(ldrs), 1, "multiple leaders for term %d", term)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func Test_SimpleElection(t *testing.T) {
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
@@ -116,6 +134,9 @@ func Test_ReElection(t *testing.T) {
 	// now reconnect server 1 to cluster
 	// it will convert to follower with same term
 	servers[0].Reconnect()
+
+	time.Sleep(3 * time.Second)
+
 	verifyElectionSafetyAndLiveness(t, servers)
 	assert.Equal(t, servers[0].State, Follower)
 	assert.Equal(t, servers[0].Term, servers[1].Term)
@@ -236,6 +257,7 @@ func Test_LogReplayability(t *testing.T) {
 	//  1. A is elected as the leader eventually (otherwise we are not persisting term number properly).
 	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
 }
+
 
 // Sends concurrent requests
 func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, waitToFinish bool) {
@@ -358,6 +380,7 @@ func Test_LaggingFollower(t *testing.T) {
 	// Send multiple write/read requests to A or B.
 	// Now, reconnect C. No more client requests will be sent.
 	// We will verify that eventually C also has all the logs (even without any further client requests).
+
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
@@ -388,7 +411,6 @@ func Test_LaggingFollower(t *testing.T) {
 	l, err := servers[0].LogStore.Length()
 	assert.NoError(t, err)
 	fmt.Printf("******* %d\n", l)
-
 }
 
 func Test_LeaderCompleteness(t *testing.T) {
@@ -406,7 +428,6 @@ func Test_LeaderCompleteness(t *testing.T) {
 	// 1. Server 1 is _eventually_ elected as the _first_ leader (possibly after multiple failed election rounds)
 	// 2. Server 1 _eventually_ forces its logs upon others overwriting them if needed. At the end
 	//    all 3 servers should have all the logs in the exact same order as server 1.
-
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
@@ -477,7 +498,6 @@ func Test_LeaderCompleteness(t *testing.T) {
 	l, err := servers[0].LogStore.Length()
 	assert.NoError(t, err)
 	fmt.Printf("******* %d\n", l)
-
 }
 
 func Test_CommitDurability(t *testing.T) {
@@ -506,3 +526,36 @@ func Test_OldTermsNotCommitted(t *testing.T) {
 	// 2. Even after many seconds the commit index of all the 3 servers stays at zero.
 	// 3. After initiating a read request, the read succeeds and the commit index is also properly updated.
 }
+
+func Test_ElectionSafety(t *testing.T) {
+
+	t.Cleanup(cleanupDbFiles)
+
+	clusterConfig := generateClusterConfig(5)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig, clusterConfig, clusterConfig)
+
+	var disconnectedQueue []int
+
+	for itr := 0; itr < 100; itr++ {
+		if itr%2 == 0 {
+			for serverIndex := range disconnectedQueue {
+				servers[serverIndex].Reconnect()
+			}
+			disconnectedQueue = disconnectedQueue[len(disconnectedQueue):]
+		} else {
+			var idx1, idx2 int
+			idx1 = rand.Intn(5)
+			idx2 = rand.Intn(5)
+			for idx2 == idx1 {
+				idx2 = rand.Intn(5)
+			}
+			servers[idx1].Disconnect()
+			servers[idx2].Disconnect()
+			disconnectedQueue = append(disconnectedQueue, idx1)
+			disconnectedQueue = append(disconnectedQueue, idx2)
+		}
+		go verifySafety(t, servers)
+		time.Sleep(time.Second)
+	}
+}
+
