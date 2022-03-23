@@ -220,6 +220,30 @@ func (server *RaftServer) RequestVote(args *common.RequestVoteRPC, result *commo
 	return nil
 }
 
+func (server *RaftServer) UpdateCommitIndexAndApply(args *common.AppendEntriesRPC) {
+	// Increment commit Index
+	if args.Entries != nil && args.Entries[0].Index < args.LeaderCommitIndex {
+		server.CommitIndex = args.Entries[0].Index
+		setCommitIndex(server.PersistentStore, args.Entries[0].Index)
+	} else {
+		server.CommitIndex = args.LeaderCommitIndex
+		setCommitIndex(server.PersistentStore, args.LeaderCommitIndex)
+	}
+	// Apply entries
+	for server.AppliedIndex < server.CommitIndex {
+		logEntry, err := server.LogStore.Get(server.AppliedIndex + 1)
+		if err != nil {
+			log.Printf("error getting log entry from log store: %+v\n", err)
+			break
+		}
+		_, err = server.FSM.Apply(*logEntry)
+		if err != nil {
+			log.Printf("error applying log entry to FSM: :%+v\n", err)
+		}
+		server.AppliedIndex++
+	}
+}
+
 func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *common.AppendEntriesRPCResult) error {
 	if server.Disconnected {
 		return fmt.Errorf("%v is disconnected\n", server.MyID)
@@ -246,58 +270,50 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 			server.CurrentLeader = &args.Leader
 		}
 
+		var length int64
+		var err error
+		prevTermMatch := false
+		// get the length of logs of the follower
+		if length, err = server.LogStore.Length(); err != nil {
+			return fmt.Errorf("Unable to get log length: %+v\n", err)
+		}
+
+		if args.PrevLogIndex < length {
+			// Follower has atleast as many log entries as the leader
+			prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex) // Get the previous entry at index where current entry will be appended
+			if err != nil {
+				return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
+			}
+			if prevLogEntry.Term != args.PrevLogTerm {
+				// There is mismatch of log entries between leader and follower
+				result.Success = false
+			} else {
+				prevTermMatch = true
+			}
+		} else {
+			// Follower is behind the leader
+			result.Success = false
+		}
+
 		// Check if client request present
 		if len(args.Entries) > 0 {
-			// get the length of logs of the follower
-			var length int64
-			var err error
-			if length, err = server.LogStore.Length(); err != nil {
-				return fmt.Errorf("Unable to get log length: %+v\n", err)
-			}
+			if prevTermMatch {
+				// Sever and follower are synced, can append entries
+				if err := server.LogStore.Store(args.Entries[0]); err != nil {
+					return fmt.Errorf("Unable to append Entry: %+v\n", err)
+				}
+				// Entry appended successfully
+				result.Success = true
+				server.UpdateCommitIndexAndApply(args)
 
-			if args.PrevLogIndex < length {
-				// Follower has atleast as many log entries as the leader
-				prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex) // Get the previous entry at index where current entry will be appended
-				if err != nil {
-					return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
-				}
-				if prevLogEntry.Term != args.PrevLogTerm {
-					// There is mismatch of log entries between leader and follower
-					result.Success = false
-				} else {
-					// Sever and follower are synced, can append entries
-					if err := server.LogStore.Store(args.Entries[0]); err != nil {
-						return fmt.Errorf("Unable to append Entry: %+v\n", err)
-					}
-					// Entry appended successfully
-					result.Success = true
-					if args.Entries[0].Index < args.LeaderCommitIndex {
-						server.CommitIndex = args.Entries[0].Index
-						setCommitIndex(server.PersistentStore, args.Entries[0].Index)
-					} else {
-						server.CommitIndex = args.LeaderCommitIndex
-						setCommitIndex(server.PersistentStore, args.LeaderCommitIndex)
-					}
-					for server.AppliedIndex < server.CommitIndex {
-						logEntry, err := server.LogStore.Get(server.AppliedIndex + 1)
-						if err != nil {
-							log.Printf("error getting log entry from log store: %+v\n", err)
-							break
-						}
-						_, err = server.FSM.Apply(*logEntry)
-						if err != nil {
-							log.Printf("error applying log entry to FSM: :%+v\n", err)
-						}
-						server.AppliedIndex++
-					}
-				}
-			} else {
-				// Follower is behind the leader
-				result.Success = false
 			}
 		} else {
 			// Heartbeat message
-			result.Success = true
+			if prevTermMatch {
+				result.Success = true
+				server.UpdateCommitIndexAndApply(args)
+			}
+
 		}
 		result.Term = server.Term
 		// reset election timeout
