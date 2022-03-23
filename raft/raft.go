@@ -271,6 +271,25 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 					}
 					// Entry appended successfully
 					result.Success = true
+					if args.Entries[0].Index < args.LeaderCommitIndex {
+						server.CommitIndex = args.Entries[0].Index
+						setCommitIndex(server.PersistentStore, args.Entries[0].Index)
+					} else {
+						server.CommitIndex = args.LeaderCommitIndex
+						setCommitIndex(server.PersistentStore, args.LeaderCommitIndex)
+					}
+					for server.AppliedIndex < server.CommitIndex {
+						logEntry, err := server.LogStore.Get(server.AppliedIndex + 1)
+						if err != nil {
+							log.Printf("error getting log entry from log store: %+v\n", err)
+							break
+						}
+						_, err = server.FSM.Apply(*logEntry)
+						if err != nil {
+							log.Printf("error applying log entry to FSM: :%+v\n", err)
+						}
+						server.AppliedIndex++
+					}
 				}
 			} else {
 				// Follower is behind the leader

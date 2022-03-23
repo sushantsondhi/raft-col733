@@ -350,6 +350,8 @@ func waitForLogsToMatch(t *testing.T, servers []*RaftServer, waitTimeSeconds int
 func checkEqualFSM(t *testing.T, servers []*RaftServer, numKeys int64) {
 	_, getMarshaller := jsonHelpers(t)
 	for _, server := range servers[1:] {
+		assert.Equal(t, servers[0].CommitIndex, server.CommitIndex, "Commit Index doesn't match")
+		assert.Equal(t, servers[0].AppliedIndex, server.AppliedIndex, "Applied Index doesn't match")
 		for index := int64(0); index < numKeys; index++ {
 			newLogEntry := common.LogEntry{
 				Data: getMarshaller(fmt.Sprintf("key%d", index)),
@@ -395,7 +397,7 @@ func Test_SimpleLogStoreAndFSMCheck(t *testing.T) {
 	sendClientSetRequests(t, servers[0], 10, true)
 	waitForLogsToMatch(t, servers, 20)
 	checkEqualLogs(t, servers)
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 	checkEqualFSM(t, servers, 10)
 }
 
