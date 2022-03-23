@@ -143,6 +143,7 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 			result.Success = false
 			return fmt.Errorf("Unable to store entry in leader logstore: %+v\n", err)
 		}
+
 		server.ApplyChan[NewLogEntry.Index] = make(chan ApplyMsg)
 		server.Mutex.Unlock()
 		server.broadcastAppendEntries()
@@ -165,7 +166,10 @@ func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *c
 			}
 		}
 		server.Mutex.Unlock()
-		return fmt.Errorf("Not connected to Leader\n")
+		// No peer that I know of is a leader
+		result.Success = false
+		result.Error = "Not connected to Leader"
+		return nil
 	}
 }
 
@@ -339,12 +343,9 @@ func (server *RaftServer) convertToFollower() {
 
 // convertToCandidate method will initiate transition of Raft's server
 // state to a candidate, it assumes that the caller has already
-// acquired mutex.
+// acquired mutex.	`
 func (server *RaftServer) convertToCandidate() {
 	log.Printf("%v: converting to candidate\n", server.MyID)
-	if server.State == Leader {
-		panic("Unexpected transition from Leader -> Candidate")
-	}
 	server.State = Candidate
 	server.CurrentLeader = nil
 	// TODO: this should be in a transaction
@@ -425,6 +426,7 @@ func (server *RaftServer) convertToLeader(term int64) {
 		}
 		return
 	}
+
 	if server.State != Candidate {
 		panic("fatal: invalid transition from Follower/Leader -> Leader")
 	}
@@ -547,9 +549,18 @@ func (server *RaftServer) commitEntries() {
 	// This implies that the value at floor(n/2) is the minimum value that is guaranteed to be
 	// replicated at ceil(n/2) servers (including ourselves)
 	n := len(matchIndexes) + 1
+
 	if matchIndexes[n/2] > server.CommitIndex {
-		server.CommitIndex = matchIndexes[n/2]
-		setCommitIndex(server.PersistentStore, server.CommitIndex)
+		matchedEntry, err := server.LogStore.Get(matchIndexes[n/2])
+		if err != nil {
+			log.Printf("error getting log entry %+v\n", err)
+			return
+		}
+		if matchedEntry.Term == server.Term {
+			server.CommitIndex = matchIndexes[n/2]
+			setCommitIndex(server.PersistentStore, server.CommitIndex)
+		}
+
 	}
 
 	for server.AppliedIndex < server.CommitIndex {
@@ -597,7 +608,11 @@ func (server *RaftServer) electionTimeoutController(timeout time.Duration) {
 			log.Printf("%v: received election timeout tick\n", server.MyID)
 			ticker.Stop()
 			server.Mutex.Lock()
-			server.convertToCandidate()
+			if server.State != Leader {
+				server.convertToCandidate()
+			} else {
+				log.Printf("%v: discarded false election timeout\n", server.MyID)
+			}
 			server.Mutex.Unlock()
 			ticker.Reset(timeoutRandomizer(timeout))
 		case reset := <-server.ElectionTimeoutChan:

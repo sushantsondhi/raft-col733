@@ -75,6 +75,24 @@ func verifyElectionSafetyAndLiveness(t *testing.T, servers []*RaftServer) {
 	assert.Truef(t, liveness, "election liveness not satisfied (no leader elected ever)")
 }
 
+func verifySafety(t *testing.T, servers []*RaftServer) {
+	for i := 0; i < 20; i++ {
+		leaders := make(map[int64][]uuid.UUID)
+		for _, server := range servers {
+			server.Mutex.Lock()
+			if server.State == Leader {
+				leaders[server.Term] = append(leaders[server.Term], server.GetID())
+			}
+			server.Mutex.Unlock()
+		}
+		for term, ldrs := range leaders {
+			fmt.Printf("Term = %d, ldrs = %v\n", term, ldrs)
+			assert.LessOrEqualf(t, len(ldrs), 1, "multiple leaders for term %d", term)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func Test_SimpleElection(t *testing.T) {
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
@@ -114,6 +132,9 @@ func Test_ReElection(t *testing.T) {
 	// now reconnect server 1 to cluster
 	// it will convert to follower with same term
 	servers[0].Reconnect()
+
+	time.Sleep(3 * time.Second)
+
 	verifyElectionSafetyAndLiveness(t, servers)
 	assert.Equal(t, servers[0].State, Follower)
 	assert.Equal(t, servers[0].Term, servers[1].Term)
@@ -151,17 +172,19 @@ func Test_ReJoin(t *testing.T) {
 func TestGetAndSetClient(t *testing.T) {
 	setMarshaller := func(key, val string) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
-			Type: kvstore.Set,
-			Key:  key,
-			Val:  val,
+			Type:          kvstore.Set,
+			Key:           key,
+			Val:           val,
+			TransactionId: uuid.New(),
 		})
 		assert.NoError(t, err)
 		return bytes
 	}
 	getMarshaller := func(key string) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
-			Type: kvstore.Get,
-			Key:  key,
+			Type:          kvstore.Get,
+			Key:           key,
+			TransactionId: uuid.New(),
 		})
 		assert.NoError(t, err)
 		return bytes
@@ -173,17 +196,21 @@ func TestGetAndSetClient(t *testing.T) {
 	verifyElectionSafetyAndLiveness(t, servers)
 
 	var success bool
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 1000; i++ {
 		rand.Seed(time.Now().UnixNano())
 		rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
 
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("val%d", i)
+
 		req := common.ClientRequestRPC{
-			Data: setMarshaller("key1", "val1"),
+			Data: setMarshaller(key, val),
 		}
 		res := common.ClientRequestRPCResult{}
 		success = false
 		for _, server := range servers {
-			server.ClientRequest(&req, &res)
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err)
 			if res.Success {
 				success = true
 				break
@@ -193,22 +220,24 @@ func TestGetAndSetClient(t *testing.T) {
 		assert.Truef(t, success, "set failed")
 		assert.Equal(t, res.Error, "")
 		req = common.ClientRequestRPC{
-			Data: getMarshaller("key1"),
+			Data: getMarshaller(key),
 		}
 		res = common.ClientRequestRPCResult{}
 		success = false
 		for _, server := range servers {
-			server.ClientRequest(&req, &res)
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err)
 			if res.Success {
 				success = true
 				break
 			}
 		}
 		assert.Truef(t, success, "set failed")
-		assert.Equal(t, res.Data, []byte("val1"))
+		assert.Equal(t, res.Data, []byte(val))
 		assert.Equal(t, res.Error, "")
 	}
 }
+
 
 func Test_LogReplayability(t *testing.T) {
 	// This test verifies that a restarted raft server is able to re-construct its state
@@ -276,4 +305,35 @@ func Test_OldTermsNotCommitted(t *testing.T) {
 	// 1. Server 3 is elected as the first leader (for a term that is greater than 2)
 	// 2. Even after many seconds the commit index of all the 3 servers stays at zero.
 	// 3. After initiating a read request, the read succeeds and the commit index is also properly updated.
+}
+func Test_ElectionSafety(t *testing.T) {
+
+	t.Cleanup(cleanupDbFiles)
+
+	clusterConfig := generateClusterConfig(5)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig, clusterConfig, clusterConfig)
+
+	var disconnectedQueue []int
+
+	for itr := 0; itr < 100; itr++ {
+		if itr%2 == 0 {
+			for serverIndex := range disconnectedQueue {
+				servers[serverIndex].Reconnect()
+			}
+			disconnectedQueue = disconnectedQueue[len(disconnectedQueue):]
+		} else {
+			var idx1, idx2 int
+			idx1 = rand.Intn(5)
+			idx2 = rand.Intn(5)
+			for idx2 == idx1 {
+				idx2 = rand.Intn(5)
+			}
+			servers[idx1].Disconnect()
+			servers[idx2].Disconnect()
+			disconnectedQueue = append(disconnectedQueue, idx1)
+			disconnectedQueue = append(disconnectedQueue, idx2)
+		}
+		go verifySafety(t, servers)
+		time.Sleep(time.Second)
+	}
 }
