@@ -337,7 +337,7 @@ func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 
 	for _, server := range servers[1:] {
 		for index := 0; index < int(logLength); index++ {
-			entry1, err := server.LogStore.Get(int64(index))
+			entry1, err := servers[0].LogStore.Get(int64(index))
 			assert.NoError(t, err)
 			entry2, err := server.LogStore.Get(int64(index))
 			assert.NoError(t, err)
@@ -449,6 +449,8 @@ func Test_LeaderCompleteness(t *testing.T) {
 		}
 
 		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
+		setTerm(pstore, int64(testLog1.LogTerms[i][len(testLog1.LogTerms[i])-1]))
+
 		assert.NoError(t, err)
 		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
 		assert.NotNil(t, raftServer)
