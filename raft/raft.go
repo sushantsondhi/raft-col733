@@ -273,6 +273,8 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		var length int64
 		var err error
 		prevTermMatch := false
+		result.Success = false
+
 		// get the length of logs of the follower
 		if length, err = server.LogStore.Length(); err != nil {
 			return fmt.Errorf("Unable to get log length: %+v\n", err)
@@ -312,6 +314,8 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 			if prevTermMatch {
 				result.Success = true
 				server.UpdateCommitIndexAndApply(args)
+			} else {
+				result.Success = false
 			}
 
 		}
