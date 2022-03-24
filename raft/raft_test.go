@@ -230,6 +230,8 @@ func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 }
 
 func Test_SimpleElection(t *testing.T) {
+	// Test to verify that a leader is elected when the raft is first started and for a given
+	// term there is only 1 leader
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
@@ -237,6 +239,7 @@ func Test_SimpleElection(t *testing.T) {
 }
 
 func Test_ElectionWithoutHeartbeat(t *testing.T) {
+	// Test to verify election safety when multiple leaders keep getting elected
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	clusterConfig.HeartBeatTimeout = 10 * time.Hour
