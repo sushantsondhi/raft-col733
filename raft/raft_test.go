@@ -383,6 +383,7 @@ func Test_LogReplayability(t *testing.T) {
 	sendClientSetRequests(t, servers[0], 10, true)
 	waitForLogsToMatch(t, servers, 10)
 	checkEqualLogs(t, servers)
+	time.Sleep(time.Second)
 	checkEqualFSM(t, servers, 10)
 	assert.Equal(t, servers[0].AppliedIndex, int64(10))
 
@@ -393,6 +394,7 @@ func Test_LogReplayability(t *testing.T) {
 	verifyElectionSafetyAndLiveness(t, servers)
 	waitForLogsToMatch(t, servers, 10)
 	checkEqualLogs(t, servers)
+	time.Sleep(time.Second)
 	checkEqualFSM(t, servers, 10)
 	assert.Equal(t, servers[0].AppliedIndex, int64(10))
 }
