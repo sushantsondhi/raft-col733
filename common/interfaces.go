@@ -19,6 +19,7 @@ type LogStore interface {
 	Get(index int64) (*LogEntry, error)
 	Length() (int64, error)
 	Close() error
+	GetLast() (*LogEntry, error)
 }
 
 // PersistentStore implementations can be used as general-purpose stores

@@ -51,7 +51,7 @@ func setVotedFor(persistentStore common.PersistentStore, votedFor *uuid.UUID) {
 }
 
 func getCommitIndex(persistentStore common.PersistentStore) int64 {
-	if r, err := persistentStore.GetDefault([]byte(common.Term), []byte("0")); err == nil {
+	if r, err := persistentStore.GetDefault([]byte(common.CommitIndex), []byte("0")); err == nil {
 		commitIndex, err := strconv.ParseInt(string(r), 10, 64)
 		if err != nil {
 			panic(err)
@@ -63,7 +63,7 @@ func getCommitIndex(persistentStore common.PersistentStore) int64 {
 }
 
 func setCommitIndex(persistentStore common.PersistentStore, commitIndex int64) {
-	err := persistentStore.Set([]byte(common.Term), []byte(strconv.FormatInt(commitIndex, 10)))
+	err := persistentStore.Set([]byte(common.CommitIndex), []byte(strconv.FormatInt(commitIndex, 10)))
 	if err != nil {
 		panic(err)
 	}

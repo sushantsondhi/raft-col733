@@ -231,6 +231,7 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 		// leader is stale, reject request
 		result.Success = false
 		result.Term = server.Term
+		return nil
 	case args.Term > server.Term:
 		// update term and convert to follower
 		server.Term = args.Term
@@ -246,39 +247,53 @@ func (server *RaftServer) AppendEntries(args *common.AppendEntriesRPC, result *c
 			server.CurrentLeader = &args.Leader
 		}
 
+		var length int64
+		var err error
+		prevTermMatch := false
+		result.Success = false
+
+		// get the length of logs of the follower
+		if length, err = server.LogStore.Length(); err != nil {
+			return fmt.Errorf("Unable to get log length: %+v\n", err)
+		}
+
+		if args.PrevLogIndex < length {
+			// Follower has at least as many log entries as the leader
+			prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex) // Get the previous entry at index where current entry will be appended
+			if err != nil {
+				return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
+			}
+			if prevLogEntry.Term != args.PrevLogTerm {
+				// There is mismatch of log entries between leader and follower
+				result.Success = false
+			} else {
+				prevTermMatch = true
+			}
+		} else {
+			// Follower is behind the leader
+			result.Success = false
+		}
+
 		// Check if client request present
 		if len(args.Entries) > 0 {
-			// get the length of logs of the follower
-			var length int64
-			var err error
-			if length, err = server.LogStore.Length(); err != nil {
-				return fmt.Errorf("Unable to get log length: %+v\n", err)
-			}
+			if prevTermMatch {
+				// Sever and follower are synced, can append entries
+				if err := server.LogStore.Store(args.Entries[0]); err != nil {
+					return fmt.Errorf("Unable to append Entry: %+v\n", err)
+				}
+				// Entry appended successfully
+				result.Success = true
+				server.updateCommitIndexAndApply(args)
 
-			if args.PrevLogIndex < length {
-				// Follower has atleast as many log entries as the leader
-				prevLogEntry, err := server.LogStore.Get(args.PrevLogIndex) // Get the previous entry at index where current entry will be appended
-				if err != nil {
-					return fmt.Errorf("Unable to get Previous Log entry from peer: %+v\n", err)
-				}
-				if prevLogEntry.Term != args.PrevLogTerm {
-					// There is mismatch of log entries between leader and follower
-					result.Success = false
-				} else {
-					// Sever and follower are synced, can append entries
-					if err := server.LogStore.Store(args.Entries[0]); err != nil {
-						return fmt.Errorf("Unable to append Entry: %+v\n", err)
-					}
-					// Entry appended successfully
-					result.Success = true
-				}
-			} else {
-				// Follower is behind the leader
-				result.Success = false
 			}
 		} else {
 			// Heartbeat message
-			result.Success = true
+			if prevTermMatch {
+				result.Success = true
+				server.updateCommitIndexAndApply(args)
+			} else {
+				result.Success = false
+			}
 		}
 		result.Term = server.Term
 		// reset election timeout
@@ -534,8 +549,48 @@ func (server *RaftServer) broadcastAppendEntries() {
 	}
 }
 
+// applyEntries brings server.AppliedIndex equal to commitIndex.
+// It assumes that caller has already acquired mutex before calling this method.
+func (server *RaftServer) applyEntries() {
+	for server.AppliedIndex < server.CommitIndex {
+		logEntry, err := server.LogStore.Get(server.AppliedIndex + 1)
+		if err != nil {
+			log.Printf("error getting log entry from log store: %+v\n", err)
+			break
+		}
+		bytes, err := server.FSM.Apply(*logEntry)
+		if err != nil {
+			log.Printf("error applying log entry to FSM: :%+v\n", err)
+		}
+		if ch, ok := server.ApplyChan[server.AppliedIndex+1]; ok {
+			ch <- ApplyMsg{
+				Err:   err,
+				Bytes: bytes,
+			}
+		}
+		server.AppliedIndex++
+	}
+}
+
+// updateCommitIndexAndApply updates the commit index of the server in response
+// to an AppendEntriesRPC request. It assumes that the caller has already
+// acquired the mutex.
+func (server *RaftServer) updateCommitIndexAndApply(args *common.AppendEntriesRPC) {
+	// Increment commit Index
+	if len(args.Entries) > 0 && args.Entries[0].Index < args.LeaderCommitIndex {
+		server.CommitIndex = args.Entries[0].Index
+		setCommitIndex(server.PersistentStore, args.Entries[0].Index)
+	} else {
+		server.CommitIndex = args.LeaderCommitIndex
+		setCommitIndex(server.PersistentStore, args.LeaderCommitIndex)
+	}
+	// Apply entries
+	server.applyEntries()
+}
+
 // commitEntries checks for new entries that are committed updating the commitedIndex.
 // It assumes that the caller has already acquired mutex before calling this method.
+// This method should only be called by leaders.
 func (server *RaftServer) commitEntries() {
 	var matchIndexes []int64
 	for _, index := range server.MatchIndexMap {
@@ -562,25 +617,7 @@ func (server *RaftServer) commitEntries() {
 		}
 
 	}
-
-	for server.AppliedIndex < server.CommitIndex {
-		logEntry, err := server.LogStore.Get(server.AppliedIndex + 1)
-		if err != nil {
-			log.Printf("error getting log entry from log store: %+v\n", err)
-			break
-		}
-		bytes, err := server.FSM.Apply(*logEntry)
-		if err != nil {
-			log.Printf("error applying log entry to FSM: :%+v\n", err)
-		}
-		if ch, ok := server.ApplyChan[server.AppliedIndex+1]; ok {
-			ch <- ApplyMsg{
-				Err:   err,
-				Bytes: bytes,
-			}
-		}
-		server.AppliedIndex++
-	}
+	server.applyEntries()
 }
 
 // electionTimeoutController should run in a separate goroutine and is
