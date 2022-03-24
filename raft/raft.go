@@ -119,9 +119,9 @@ func (server *RaftServer) GetID() uuid.UUID {
 }
 
 func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
-	if server.Disconnected {
-		return fmt.Errorf("%v is disconnected\n", server.MyID)
-	}
+	//if server.Disconnected {
+	//	return fmt.Errorf("%v is disconnected\n", server.MyID)
+	//}
 	log.Printf("%v received client request\n", server.MyID)
 	server.Mutex.Lock()
 	if server.State == Leader {

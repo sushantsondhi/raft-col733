@@ -30,7 +30,7 @@ func NewPeer(address common.ServerAddress, id uuid.UUID) *Peer {
 
 // call takes care of automatically re-trying on transient failures
 func (peer *Peer) call(method string, args interface{}, result interface{}) (err error) {
-	if peer.disconnected {
+	if peer.disconnected && method != "RPCServer.ClientRequest" {
 		return errors.New("disconnected rpc connection")
 	}
 	for i := 0; i < 3; i++ {
