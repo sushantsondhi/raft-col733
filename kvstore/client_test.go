@@ -53,14 +53,35 @@ func generateClusterConfig(n int) common.ClusterConfig {
 	}
 }
 
+func verifyElectionSafetyAndLiveness(b *testing.B, servers []*raft.RaftServer) {
+	liveness := false
+	for i := 0; i < 20; i++ {
+		leaders := make(map[int64][]uuid.UUID)
+		for _, server := range servers {
+			server.Mutex.Lock()
+			if server.State == raft.Leader {
+				leaders[server.Term] = append(leaders[server.Term], server.GetID())
+			}
+			server.Mutex.Unlock()
+		}
+		for term, ldrs := range leaders {
+			fmt.Printf("Term = %d, ldrs = %v\n", term, ldrs)
+			assert.LessOrEqualf(b, len(ldrs), 1, "multiple leaders for term %d", term)
+			liveness = true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	assert.Truef(b, liveness, "election liveness not satisfied (no leader elected ever)")
+}
+
 func spinUpClusterAndGetStoreInterface(b *testing.B) *KVStore {
 	b.Cleanup(cleanupDbFiles)
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
 	clusterConfig3 := clusterConfig1
 
-	_ = makeRaftCluster(b, clusterConfig1, clusterConfig2, clusterConfig3)
-
+	raftServers := makeRaftCluster(b, clusterConfig1, clusterConfig2, clusterConfig3)
+	verifyElectionSafetyAndLiveness(b, raftServers)
 	clientManager := rpc.NewManager()
 
 	store, err := NewKeyValStore(clusterConfig1.Cluster, clientManager)
@@ -71,8 +92,7 @@ func spinUpClusterAndGetStoreInterface(b *testing.B) *KVStore {
 func BenchmarkClient(b *testing.B) {
 
 	store := spinUpClusterAndGetStoreInterface(b)
-
-	numRequests := 2
+	numRequests := 100
 
 	start := time.Now()
 
