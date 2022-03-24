@@ -1,0 +1,9 @@
+cluster:
+- id: cca15943-92a0-42aa-8a73-6ba0a4a6b098
+  netaddress: localhost:12345
+- id: 02bc0a73-5f51-40ff-93f2-6f583c9b4f59
+  netaddress: localhost:12346
+- id: 35a211ed-6510-41d4-923c-39ccc0353519
+  netaddress: localhost:12347
+heartbeattimeout: 50
+electiontimeout: 200

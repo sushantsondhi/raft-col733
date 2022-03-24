@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"bytes"
 	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/common"
 	"strconv"
@@ -26,8 +27,8 @@ func setTerm(persistentStore common.PersistentStore, term int64) {
 }
 
 func getVotedFor(persistentStore common.PersistentStore) *uuid.UUID {
-	if r, err := persistentStore.GetDefault([]byte(common.VotedFor), nil); err == nil {
-		if r != nil {
+	if r, err := persistentStore.GetDefault([]byte(common.VotedFor), []byte("nil")); err == nil {
+		if !bytes.Equal(r, []byte("nil")) {
 			votedFor := uuid.MustParse(string(r))
 			return &votedFor
 		}
@@ -40,7 +41,7 @@ func getVotedFor(persistentStore common.PersistentStore) *uuid.UUID {
 func setVotedFor(persistentStore common.PersistentStore, votedFor *uuid.UUID) {
 	var err error
 	if votedFor == nil {
-		err = persistentStore.Set([]byte(common.VotedFor), nil)
+		err = persistentStore.Set([]byte(common.VotedFor), []byte("nil"))
 	} else {
 		err = persistentStore.Set([]byte(common.VotedFor), []byte((*votedFor).String()))
 	}
