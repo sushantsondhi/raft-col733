@@ -77,100 +77,6 @@ func verifyElectionSafetyAndLiveness(t *testing.T, servers []*RaftServer) {
 	assert.Truef(t, liveness, "election liveness not satisfied (no leader elected ever)")
 }
 
-func verifySafety(t *testing.T, servers []*RaftServer) {
-	for i := 0; i < 20; i++ {
-		leaders := make(map[int64][]uuid.UUID)
-		for _, server := range servers {
-			server.Mutex.Lock()
-			if server.State == Leader {
-				leaders[server.Term] = append(leaders[server.Term], server.GetID())
-			}
-			server.Mutex.Unlock()
-		}
-		for term, ldrs := range leaders {
-			fmt.Printf("Term = %d, ldrs = %v\n", term, ldrs)
-			assert.LessOrEqualf(t, len(ldrs), 1, "multiple leaders for term %d", term)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func Test_SimpleElection(t *testing.T) {
-	t.Cleanup(cleanupDbFiles)
-	clusterConfig := generateClusterConfig(3)
-	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
-	verifyElectionSafetyAndLiveness(t, servers)
-}
-
-func Test_ElectionWithoutHeartbeat(t *testing.T) {
-	t.Cleanup(cleanupDbFiles)
-	clusterConfig := generateClusterConfig(3)
-	clusterConfig.HeartBeatTimeout = 10 * time.Hour
-	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
-	verifyElectionSafetyAndLiveness(t, servers)
-}
-
-func Test_ReElection(t *testing.T) {
-	t.Cleanup(cleanupDbFiles)
-	clusterConfig1 := generateClusterConfig(3)
-	clusterConfig2 := clusterConfig1
-	clusterConfig3 := clusterConfig1
-	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
-	clusterConfig2.ElectionTimeout = time.Second
-	clusterConfig3.ElectionTimeout = time.Second
-
-	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.Equal(t, servers[0].State, Leader)
-	// now 1 must have been elected as leader, so we disconnect it from cluster
-	servers[0].Disconnect()
-	// someone else should be elected as a leader
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.True(t, servers[1].State == Leader || servers[2].State == Leader)
-	// note that server 1 will still remain a leader but of an older term
-	assert.Equal(t, servers[0].State, Leader)
-	assert.Less(t, servers[0].Term, servers[1].Term)
-
-	// now reconnect server 1 to cluster
-	// it will convert to follower with same term
-	servers[0].Reconnect()
-
-	time.Sleep(3 * time.Second)
-
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.Equal(t, servers[0].State, Follower)
-	assert.Equal(t, servers[0].Term, servers[1].Term)
-}
-
-func Test_ReJoin(t *testing.T) {
-	t.Cleanup(cleanupDbFiles)
-	clusterConfig1 := generateClusterConfig(3)
-	clusterConfig2 := clusterConfig1
-	clusterConfig3 := clusterConfig1
-	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
-	clusterConfig2.ElectionTimeout = time.Second
-	clusterConfig3.ElectionTimeout = time.Second
-
-	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.Equal(t, servers[0].State, Leader)
-
-	// now disconnect 2 (a follower) from the cluster
-	servers[2].Disconnect()
-	// it should not affect election safety and liveness
-	verifyElectionSafetyAndLiveness(t, servers)
-	// wait for a few more seconds
-	time.Sleep(3 * time.Second)
-	// term of 2 must be ahead of the other two
-	assert.Equal(t, servers[2].State, Candidate)
-	assert.Greater(t, servers[2].Term, servers[0].Term)
-	assert.Greater(t, servers[2].Term, servers[1].Term)
-
-	// now we reconnect 2
-	servers[2].Reconnect()
-	verifyElectionSafetyAndLiveness(t, servers)
-}
-
 func jsonHelpers(t *testing.T) (func(key, val string, transactionId uuid.UUID) []byte, func(key string) []byte) {
 	setMarshaller := func(key, val string, transactionId uuid.UUID) []byte {
 		bytes, err := json.Marshal(kvstore.Request{
@@ -195,80 +101,15 @@ func jsonHelpers(t *testing.T) (func(key, val string, transactionId uuid.UUID) [
 	return setMarshaller, getMarshaller
 }
 
-func TestGetAndSetClient(t *testing.T) {
-	setMarshaller, getMarshaller := jsonHelpers(t)
-	t.Cleanup(cleanupDbFiles)
-	clusterConfig := generateClusterConfig(3)
-	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
-	verifyElectionSafetyAndLiveness(t, servers)
-
-	var success bool
-	for i := 0; i < 1000; i++ {
-		rand.Seed(time.Now().UnixNano())
-		rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
-
-		key := fmt.Sprintf("key%d", i)
-		val := fmt.Sprintf("val%d", i)
-
-		req := common.ClientRequestRPC{
-			Data: setMarshaller(key, val, uuid.New()),
-		}
-		res := common.ClientRequestRPCResult{}
-		success = false
-		for _, server := range servers {
-			err := server.ClientRequest(&req, &res)
-			assert.NoError(t, err)
-			if res.Success {
-				success = true
-				break
-			}
-		}
-
-		assert.Truef(t, success, "set failed")
-		assert.Equal(t, res.Error, "")
-		req = common.ClientRequestRPC{
-			Data: getMarshaller(key),
-		}
-		res = common.ClientRequestRPCResult{}
-		success = false
-		for _, server := range servers {
-			err := server.ClientRequest(&req, &res)
-			assert.NoError(t, err)
-			if res.Success {
-				success = true
-				break
-			}
-		}
-		assert.Truef(t, success, "set failed")
-		assert.Equal(t, res.Data, []byte(val))
-		assert.Equal(t, res.Error, "")
-	}
-}
-
-func Test_LogReplayability(t *testing.T) {
-	// This test verifies that a restarted raft server is able to re-construct its state
-	// by simply replaying the logs on its FSM.
-	// It will also weakly test our persistence guarantees.
-	// We start with a simple cluster of 3 servers - A, B & C. Initially the FSM starts empty F_0.
-	// The client sends multiple read/write requests to the cluster so that the A's FSM state is now F_1.
-	// Now we kill the server A by permanently stopping it.
-	// We then respawn the server A.
-	// We will now verify that -
-	//  1. A is elected as the leader eventually (otherwise we are not persisting term number properly).
-	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
-}
-
 // Sends concurrent requests
 func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, waitToFinish bool) {
-
 	setMarshaller, _ := jsonHelpers(t)
 	var wg sync.WaitGroup
-
 	for i := int64(0); i < numRequests; i++ {
 		wg.Add(1)
 		reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
 		// statements might have unexpected values
-		go func(wg *sync.WaitGroup) {
+		go func() {
 			defer wg.Done()
 			key := fmt.Sprintf("key%d", reqNumber)
 			val := fmt.Sprintf("val%d", reqNumber)
@@ -281,9 +122,8 @@ func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, 
 			assert.NoError(t, err, "Client request got error")
 			assert.Truef(t, res.Success, "set request failed")
 			assert.Equal(t, res.Error, "", "Error in setting value")
-		}(&wg)
+		}()
 	}
-
 	if waitToFinish {
 		wg.Wait()
 	}
@@ -389,16 +229,154 @@ func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 
 }
 
+func Test_SimpleElection(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func Test_ElectionWithoutHeartbeat(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	clusterConfig.HeartBeatTimeout = 10 * time.Hour
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func Test_ReElection(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
+	clusterConfig2.ElectionTimeout = time.Second
+	clusterConfig3.ElectionTimeout = time.Second
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+	// now 1 must have been elected as leader, so we disconnect it from cluster
+	servers[0].Disconnect()
+	// someone else should be elected as a leader
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.True(t, servers[1].State == Leader || servers[2].State == Leader)
+	// note that server 1 will still remain a leader but of an older term
+	assert.Equal(t, servers[0].State, Leader)
+	assert.Less(t, servers[0].Term, servers[1].Term)
+
+	// now reconnect server 1 to cluster
+	// it will convert to follower with same term
+	servers[0].Reconnect()
+
+	time.Sleep(3 * time.Second)
+
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Follower)
+	assert.Equal(t, servers[0].Term, servers[1].Term)
+}
+
+func Test_ReJoin(t *testing.T) {
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
+	clusterConfig2.ElectionTimeout = time.Second
+	clusterConfig3.ElectionTimeout = time.Second
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+
+	// now disconnect 2 (a follower) from the cluster
+	servers[2].Disconnect()
+	// it should not affect election safety and liveness
+	verifyElectionSafetyAndLiveness(t, servers)
+	// wait for a few more seconds
+	time.Sleep(3 * time.Second)
+	// term of 2 must be ahead of the other two
+	assert.Equal(t, servers[2].State, Candidate)
+	assert.Greater(t, servers[2].Term, servers[0].Term)
+	assert.Greater(t, servers[2].Term, servers[1].Term)
+
+	// now we reconnect 2
+	servers[2].Reconnect()
+	verifyElectionSafetyAndLiveness(t, servers)
+}
+
+func TestGetAndSetClient(t *testing.T) {
+	setMarshaller, getMarshaller := jsonHelpers(t)
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers)
+
+	var success bool
+	for i := 0; i < 1000; i++ {
+		rand.Seed(time.Now().UnixNano())
+		rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
+
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("val%d", i)
+
+		req := common.ClientRequestRPC{
+			Data: setMarshaller(key, val, uuid.New()),
+		}
+		res := common.ClientRequestRPCResult{}
+		success = false
+		for _, server := range servers {
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err)
+			if res.Success {
+				success = true
+				break
+			}
+		}
+
+		assert.Truef(t, success, "set failed")
+		assert.Equal(t, res.Error, "")
+		req = common.ClientRequestRPC{
+			Data: getMarshaller(key),
+		}
+		res = common.ClientRequestRPCResult{}
+		success = false
+		for _, server := range servers {
+			err := server.ClientRequest(&req, &res)
+			assert.NoError(t, err)
+			if res.Success {
+				success = true
+				break
+			}
+		}
+		assert.Truef(t, success, "set failed")
+		assert.Equal(t, res.Data, []byte(val))
+		assert.Equal(t, res.Error, "")
+	}
+}
+
 func Test_SimpleLogStoreAndFSMCheck(t *testing.T) {
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
 	verifyElectionSafetyAndLiveness(t, servers)
 	sendClientSetRequests(t, servers[0], 10, true)
-	waitForLogsToMatch(t, servers, 20)
+	waitForLogsToMatch(t, servers, 3)
 	checkEqualLogs(t, servers)
-	time.Sleep(2 * time.Second)
 	checkEqualFSM(t, servers, 10)
+}
+
+func Test_LogReplayability(t *testing.T) {
+	// This test verifies that a restarted raft server is able to re-construct its state
+	// by simply replaying the logs on its FSM.
+	// It will also weakly test our persistence guarantees.
+	// We start with a simple cluster of 3 servers - A, B & C. Initially the FSM starts empty F_0.
+	// The client sends multiple read/write requests to the cluster so that the A's FSM state is now F_1.
+	// Now we kill the server A by permanently stopping it.
+	// We then respawn the server A.
+	// We will now verify that -
+	//  1. A is elected as the leader eventually (otherwise we are not persisting term number properly).
+	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
 }
 
 func Test_LaggingFollower(t *testing.T) {
@@ -433,7 +411,7 @@ func Test_LaggingFollower(t *testing.T) {
 	//Reconnect Server 2
 	servers[2].Reconnect()
 
-	time.Sleep(time.Second)
+	verifyElectionSafetyAndLiveness(t, servers)
 	assert.True(t, servers[0].State == Leader || servers[1].State == Leader)
 	waitForLogsToMatch(t, servers, 20)
 	checkEqualLogs(t, servers)
@@ -446,23 +424,22 @@ func Test_LaggingFollower(t *testing.T) {
 
 func Test_LeaderCompleteness(t *testing.T) {
 	// This test verifies that our implementation obeys the leader completeness property.
-	// To verify this we spin up a cluster of 3 raft servers but with pre-filled log stores
+	// To verify this we spin up a cluster of 5 raft servers but with pre-filled log stores
 	// in a manner so that -
 	// Server 1 has the following logs (term numbers in the index order):
-	// 		1 1 2 2 3 3 4 4
+	// 		1 2 3 4 5
 	// Server 2 has the following logs (term numbers in the index order):
-	// 		1 1 2 2 3 3
+	// 		1 2
 	// Server 3 has the following logs (term numbers in the index order):
-	// 		1 1 2 4
-	// (Note that terms of all the servers will have to be initialized with 4)
+	// 		1
+	// Server 4 & 5 will remain stopped throughout the test
+	// (Note that terms of all the servers will have to be initialized with 5)
 	// We will then verify that -
 	// 1. Server 1 is _eventually_ elected as the _first_ leader (possibly after multiple failed election rounds)
 	// 2. Server 1 _eventually_ forces its logs upon others overwriting them if needed. At the end
 	//    all 3 servers should have all the logs in the exact same order as server 1.
 	t.Cleanup(cleanupDbFiles)
-	clusterConfig1 := generateClusterConfig(3)
-	clusterConfig2 := clusterConfig1
-	clusterConfig3 := clusterConfig1
+	clusterConfig := generateClusterConfig(5)
 
 	type initialLogTerms struct {
 		ExpectedFirstLeaderIndex int
@@ -472,17 +449,23 @@ func Test_LeaderCompleteness(t *testing.T) {
 	testLog1 := initialLogTerms{
 		ExpectedFirstLeaderIndex: 0,
 		LogTerms: [][]int{
-			{1, 1, 2, 2, 3, 4, 4},
-			{1, 1, 2, 2, 3, 3},
-			{1, 1, 2, 4},
+			{1, 2, 3, 4, 5},
+			{1, 2},
+			{1},
+			{1, 2, 3, 4}, // perpetually disconnected
+			{1, 2, 3},    // perpetually disconnected
 		},
 	}
 
-	configs := []common.ClusterConfig{clusterConfig1, clusterConfig2, clusterConfig3}
+	configs := []common.ClusterConfig{clusterConfig, clusterConfig, clusterConfig, clusterConfig, clusterConfig}
 
 	var servers []*RaftServer
 
 	for i := 0; i < len(configs); i++ {
+		if i >= 3 {
+			// last 2 servers will always be off
+			continue
+		}
 		logstore, err := persistent.CreateDbLogStore(fmt.Sprintf("logstore-%v.db", configs[i].Cluster[i].ID))
 		assert.NoError(t, err)
 
@@ -495,42 +478,28 @@ func Test_LeaderCompleteness(t *testing.T) {
 			err := logstore.Store(common.LogEntry{
 				Index: int64(index + 1), // Careful about index
 				Term:  int64(term),
-				Data:  nil,
 			})
 			assert.NoError(t, err)
 		}
 
 		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
-		setTerm(pstore, 4)
+		setTerm(pstore, 5)
 		assert.NoError(t, err)
 		raftServer := NewRaftServer(configs[i].Cluster[i], configs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
-		fmt.Printf("Raftserver %v started\n", raftServer.MyID)
 		assert.NotNil(t, raftServer)
 		servers = append(servers, raftServer)
 	}
 
-	var leaders []uuid.UUID
-
-	go func() {
-		for {
-			for _, server := range servers {
-				server.Mutex.Lock()
-				if server.State == Leader {
-					leaders = append(leaders, server.GetID())
-				}
-				server.Mutex.Unlock()
-			}
-		}
-	}()
-
+	time.Sleep(3 * time.Second)
 	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[testLog1.ExpectedFirstLeaderIndex].State, Leader)
+
 	waitForLogsToMatch(t, servers, 100)
-	assert.Greater(t, len(leaders), 0)
-	assert.Equal(t, servers[testLog1.ExpectedFirstLeaderIndex].GetID(), leaders[0])
 	checkEqualLogs(t, servers)
+	checkEqualFSM(t, servers, 0)
 	l, err := servers[0].LogStore.Length()
 	assert.NoError(t, err)
-	fmt.Printf("******* %d\n", l)
+	assert.Equal(t, int64(6), l)
 }
 
 func Test_CommitDurability(t *testing.T) {
@@ -569,7 +538,7 @@ func Test_ElectionSafety(t *testing.T) {
 
 	var disconnectedQueue []int
 
-	for itr := 0; itr < 100; itr++ {
+	for itr := 0; itr < 10; itr++ {
 		if itr%2 == 0 {
 			for serverIndex := range disconnectedQueue {
 				servers[serverIndex].Reconnect()
@@ -587,7 +556,6 @@ func Test_ElectionSafety(t *testing.T) {
 			disconnectedQueue = append(disconnectedQueue, idx1)
 			disconnectedQueue = append(disconnectedQueue, idx2)
 		}
-		go verifySafety(t, servers)
-		time.Sleep(time.Second)
+		verifyElectionSafetyAndLiveness(t, servers)
 	}
 }
