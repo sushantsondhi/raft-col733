@@ -120,8 +120,8 @@ func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, 
 			res := common.ClientRequestRPCResult{}
 			err := server.ClientRequest(&req, &res)
 			assert.NoError(t, err, "Client request got error")
-			assert.Truef(t, res.Success, "set request failed")
 			assert.Equal(t, res.Error, "", "Error in setting value")
+			assert.Truef(t, res.Success, "set request failed")
 		}()
 	}
 	if waitToFinish {
@@ -375,8 +375,26 @@ func Test_LogReplayability(t *testing.T) {
 	// Now we kill the server A by permanently stopping it.
 	// We then respawn the server A.
 	// We will now verify that -
-	//  1. A is elected as the leader eventually (otherwise we are not persisting term number properly).
-	//  2. Eventually A's applied index is also restored and A's FSM state is again F_1.
+	//  1. Eventually A's applied index is also restored and A's FSM state is again F_1.
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig := generateClusterConfig(3)
+	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
+	verifyElectionSafetyAndLiveness(t, servers[1:])
+	sendClientSetRequests(t, servers[0], 10, true)
+	waitForLogsToMatch(t, servers, 10)
+	checkEqualLogs(t, servers)
+	checkEqualFSM(t, servers, 10)
+	assert.Equal(t, servers[0].AppliedIndex, int64(10))
+
+	assert.NoError(t, servers[0].Stop())
+	verifyElectionSafetyAndLiveness(t, servers[1:])
+	newServers := makeRaftCluster(t, clusterConfig)
+	servers[0] = newServers[0]
+	verifyElectionSafetyAndLiveness(t, servers)
+	waitForLogsToMatch(t, servers, 10)
+	checkEqualLogs(t, servers)
+	checkEqualFSM(t, servers, 10)
+	assert.Equal(t, servers[0].AppliedIndex, int64(10))
 }
 
 func Test_LaggingFollower(t *testing.T) {
@@ -514,6 +532,33 @@ func Test_CommitDurability(t *testing.T) {
 	// we have only B & C in the cluster.
 	// A *read* client request is sent to C which attempts to read the value written by previous request (on A),
 	// verify that it succeeds and the read value is anticipated.
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig2
+	clusterConfig2.ElectionTimeout = 500 * time.Millisecond
+	clusterConfig3.ElectionTimeout = 500 * time.Millisecond
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
+	servers[2].Disconnect()
+	verifyElectionSafetyAndLiveness(t, servers[:])
+	assert.Equal(t, Leader, servers[0].State)
+
+	var resp common.ClientRequestRPCResult
+	if err := servers[2].ClientRequest(&common.ClientRequestRPC{}, &resp); err == nil {
+		assert.False(t, resp.Success)
+	}
+
+	sendClientSetRequests(t, servers[1], 10, true)
+	time.Sleep(time.Second)
+	checkEqualFSM(t, servers[:2], 10)
+
+	assert.NoError(t, servers[0].Stop())
+	servers[2].Reconnect()
+	verifyElectionSafetyAndLiveness(t, servers[1:])
+	waitForLogsToMatch(t, servers[1:], 10)
+	checkEqualLogs(t, servers[1:])
+	checkEqualFSM(t, servers[1:], 10)
 }
 
 func Test_OldTermsNotCommitted(t *testing.T) {
@@ -522,11 +567,78 @@ func Test_OldTermsNotCommitted(t *testing.T) {
 	// Server 1:	1
 	// Server 2:	1
 	// Server 3:	1 2
-	// All the logs should be write requests.
+	// All the logs should be write requests. Assume that server 3 has lower election timeout so that it is elected.
 	// Now we will verify that
 	// 1. Server 3 is elected as the first leader (for a term that is greater than 2)
 	// 2. Even after many seconds the commit index of all the 3 servers stays at zero.
 	// 3. After initiating a read request, the read succeeds and the commit index is also properly updated.
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig2
+	clusterConfig1.ElectionTimeout = time.Second
+	clusterConfig2.ElectionTimeout = time.Second
+	clusterConfigs := []common.ClusterConfig{
+		clusterConfig1, clusterConfig2, clusterConfig3,
+	}
+	var servers []*RaftServer
+	setter, getter := jsonHelpers(t)
+	type initialLogTerms struct {
+		ExpectedFirstLeaderIndex int
+		LogTerms                 [][]int
+	}
+	testLog1 := initialLogTerms{
+		ExpectedFirstLeaderIndex: 2,
+		LogTerms: [][]int{
+			{1},
+			{1},
+			{1, 2},
+		},
+	}
+	for i := 0; i < len(clusterConfigs); i++ {
+		logstore, err := persistent.CreateDbLogStore(fmt.Sprintf("logstore-%v.db", clusterConfigs[i].Cluster[i].ID))
+		assert.NoError(t, err)
+
+		err = logstore.Store(common.LogEntry{
+			Index: 0,
+		})
+		assert.NoError(t, err)
+
+		for index, term := range testLog1.LogTerms[i] {
+			key := fmt.Sprintf("key%d", index)
+			err := logstore.Store(common.LogEntry{
+				Index: int64(index + 1), // Careful about index
+				Term:  int64(term),
+				Data:  setter(key, fmt.Sprintf("val%d", index), uuid.NewSHA1(uuid.Nil, []byte(key))),
+			})
+			assert.NoError(t, err)
+		}
+
+		pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", clusterConfigs[i].Cluster[i].ID))
+		setTerm(pstore, 2)
+		assert.NoError(t, err)
+		raftServer := NewRaftServer(clusterConfigs[i].Cluster[i], clusterConfigs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
+		assert.NotNil(t, raftServer)
+		servers = append(servers, raftServer)
+	}
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, Leader, servers[2].State)
+
+	time.Sleep(5 * time.Second)
+	checkEqualLogs(t, servers)
+	assert.Equal(t, int64(0), servers[0].CommitIndex)
+	assert.Equal(t, int64(0), servers[1].CommitIndex)
+	assert.Equal(t, int64(0), servers[2].CommitIndex)
+
+	var resp common.ClientRequestRPCResult
+	assert.NoError(t, servers[0].ClientRequest(&common.ClientRequestRPC{
+		Data: getter("key1"),
+	}, &resp))
+	assert.True(t, resp.Success)
+	assert.EqualValues(t, []byte("val1"), resp.Data)
+
+	time.Sleep(time.Second)
+	checkEqualFSM(t, servers, 2)
 }
 
 func Test_ElectionSafety(t *testing.T) {
