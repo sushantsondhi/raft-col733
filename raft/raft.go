@@ -515,6 +515,10 @@ func (server *RaftServer) broadcastAppendEntries() {
 			}
 			server.Mutex.Lock()
 			defer server.Mutex.Unlock()
+			if server.State != Leader {
+				// We are no longer the leader now
+				return
+			}
 			if response.Term != server.Term {
 				// Either the peer was on a higher term, or our term number changed concurrently
 				// In either case the request is invalid and must be discarded
