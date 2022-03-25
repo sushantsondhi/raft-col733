@@ -109,7 +109,7 @@ func NewRaftServer(
 			log.Printf("%v: failed to start RPC server\n", me.ID)
 		}
 	}()
-
+	log.Printf("Term: %d for server %v\n", newRaftServer.Term, me.ID)
 	log.Printf("Initialization complete for server %v\n", me.ID)
 	return newRaftServer
 }

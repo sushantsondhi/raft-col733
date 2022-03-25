@@ -31,6 +31,16 @@ func makeRaftCluster(t *testing.T, configs ...common.ClusterConfig) (servers []*
 	return
 }
 
+func makeRaftServer(t *testing.T, config common.ClusterConfig, i int) (server *RaftServer) {
+	logstore, err := persistent.CreateDbLogStore(fmt.Sprintf("logstore-%v.db", config.Cluster[i].ID))
+	assert.NoError(t, err)
+	pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", config.Cluster[i].ID))
+	assert.NoError(t, err)
+	raftServer := NewRaftServer(config.Cluster[i], config, kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
+	assert.NotNil(t, raftServer)
+	return raftServer
+}
+
 func cleanupDbFiles() {
 	matches, err := filepath.Glob("*.db")
 	if err != nil {
@@ -442,10 +452,32 @@ func Test_SimpleLogStoreAndFSMCheck(t *testing.T) {
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
 	verifyElectionSafetyAndLiveness(t, servers)
-	sendClientSetRequests(t, servers[0], 10, true, "val")
+	sendClientSetRequests(t, servers[0], 100, true, "val")
 	waitForLogsToMatch(t, servers, 3)
 	checkEqualLogs(t, servers)
-	checkEqualFSM(t, servers, 10)
+	time.Sleep(2 * time.Second)
+	checkEqualFSM(t, servers, 100)
+}
+
+func Test_OneVotePerServerPerTerm(t *testing.T) {
+	// This function tests that a any raft server will vote only once in a given term
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 3 to ensure that 3 never becomes a leader
+	clusterConfig2.ElectionTimeout = 10 * time.Hour
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+	servers[0].Disconnect()
+	assert.Equal(t, servers[1].Term, int64(1))
+	servers = append(servers, makeRaftServer(t, clusterConfig3, 2))
+	assert.Equal(t, servers[2].Term, int64(0))
+	verifyElectionSafetyAndLiveness(t, servers[1:])
+	assert.Equal(t, servers[2].State, Leader)
+	assert.Equal(t, servers[2].Term, int64(2))
 }
 
 func Test_LogReplayability(t *testing.T) {
