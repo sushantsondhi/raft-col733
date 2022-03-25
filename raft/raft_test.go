@@ -294,81 +294,8 @@ func Test_ReElection(t *testing.T) {
 	assert.Equal(t, servers[0].Term, servers[1].Term)
 }
 
-func Test_HandleClientRequestOnLeaderDisconnect(t *testing.T) {
-	// This test verifies that if a leader gets disconnected then the previous client requests sent to leader will not be
-	// processed and will fail
-	// The state of the disconnected leader will be Leader until it reconnects back into the cluster. The disconnected
-	// leader will then become a follower and will have its term updated as the new leader. It's log will be updated with the
-	// log of the new leader
-	t.Cleanup(cleanupDbFiles)
-	clusterConfig1 := generateClusterConfig(3)
-	clusterConfig2 := clusterConfig1
-	clusterConfig3 := clusterConfig1
-	// purposefully delay the election timeouts of 2 & 3 to ensure that 1 gets elected as leader first
-	clusterConfig2.ElectionTimeout = time.Second
-	clusterConfig3.ElectionTimeout = time.Second
-
-	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2, clusterConfig3)
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.Equal(t, servers[0].State, Leader)
-	// now 1 must have been elected as leader, so we disconnect it from cluster
-	servers[0].Disconnect()
-	// send client request to disconnected leader
-	waitChannel := make(chan bool)
-
-	go func() {
-		setMarshaller, getMarshaller := jsonHelpers(t)
-		var wg sync.WaitGroup
-		for i := int64(0); i < 10; i++ {
-			wg.Add(1)
-			reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
-			// statements might have unexpected values
-			go func() {
-				defer wg.Done()
-				key := fmt.Sprintf("key%d", reqNumber)
-				val := fmt.Sprintf("%s%d", "val", reqNumber)
-
-				req := common.ClientRequestRPC{
-					Data: setMarshaller(key, val, uuid.New()),
-				}
-				res := common.ClientRequestRPCResult{}
-				err := servers[0].ClientRequest(&req, &res)
-				if err == nil {
-					assert.Equal(t, res.Error, "", "Error in setting value")
-					assert.Truef(t, res.Success, "set request failed")
-					newLogEntry := common.LogEntry{
-						Data: getMarshaller(fmt.Sprintf("key%d", reqNumber)),
-					}
-					entry1, err := servers[0].FSM.Apply(newLogEntry)
-					assert.NoError(t, err)
-					assert.Equal(t, string(entry1), val, "Client value applied is incorrect")
-				}
-			}()
-		}
-		wg.Wait()
-
-		waitChannel <- true
-	}()
-
-	// someone else should be elected as a leader
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.True(t, servers[1].State == Leader || servers[2].State == Leader)
-	// note that server 1 will still remain a leader but of an older term
-	assert.Equal(t, servers[0].State, Leader)
-	assert.Less(t, servers[0].Term, servers[1].Term)
-	sendClientSetRequests(t, servers[1], 15, true, "value")
-	// now reconnect server 1 to cluster
-	// it will convert to follower with same term
-	servers[0].Reconnect()
-	<-waitChannel
-	time.Sleep(3 * time.Second)
-	//
-	verifyElectionSafetyAndLiveness(t, servers)
-	assert.Equal(t, servers[0].State, Follower)
-	assert.Equal(t, servers[0].Term, servers[1].Term)
-}
-
 func Test_ReJoin(t *testing.T) {
+	// This test verifies that a disconnected server, eventually catches up to other server after reconnecting
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
@@ -395,9 +322,13 @@ func Test_ReJoin(t *testing.T) {
 	// now we reconnect 2
 	servers[2].Reconnect()
 	verifyElectionSafetyAndLiveness(t, servers)
+	time.Sleep(5 * time.Second)
+	assert.Equal(t, servers[0].Term, servers[2].Term, "Disconnected server has not caught up")
 }
 
 func TestGetAndSetClient(t *testing.T) {
+	// This test verifies that the client RPC is working correctly and the client requests are handled properly
+	// This also ensures that correct value is applied in the FSM and returned to client
 	setMarshaller, getMarshaller := jsonHelpers(t)
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
@@ -448,6 +379,7 @@ func TestGetAndSetClient(t *testing.T) {
 }
 
 func Test_SimpleLogStoreAndFSMCheck(t *testing.T) {
+	// This test verifies that all the logs and FSM of all raft servers are in sync if there is no failure
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)

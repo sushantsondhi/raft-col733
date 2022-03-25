@@ -109,7 +109,6 @@ func NewRaftServer(
 			log.Printf("%v: failed to start RPC server\n", me.ID)
 		}
 	}()
-	log.Printf("Term: %d for server %v\n", newRaftServer.Term, me.ID)
 	log.Printf("Initialization complete for server %v\n", me.ID)
 	return newRaftServer
 }
@@ -119,9 +118,9 @@ func (server *RaftServer) GetID() uuid.UUID {
 }
 
 func (server *RaftServer) ClientRequest(args *common.ClientRequestRPC, result *common.ClientRequestRPCResult) error {
-	//if server.Disconnected {
-	//	return fmt.Errorf("%v is disconnected\n", server.MyID)
-	//}
+	if server.Disconnected {
+		return fmt.Errorf("%v is disconnected\n", server.MyID)
+	}
 	log.Printf("%v received client request\n", server.MyID)
 	server.Mutex.Lock()
 	if server.State == Leader {
