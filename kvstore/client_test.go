@@ -8,6 +8,7 @@ import (
 	"github.com/sushantsondhi/raft-col733/persistent"
 	"github.com/sushantsondhi/raft-col733/raft"
 	"github.com/sushantsondhi/raft-col733/rpc"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -74,24 +75,28 @@ func verifyElectionSafetyAndLiveness(b *testing.B, servers []*raft.RaftServer) {
 	assert.Truef(b, liveness, "election liveness not satisfied (no leader elected ever)")
 }
 
-func spinUpClusterAndGetStoreInterface(b *testing.B) *KVStore {
+func spinUpClusterAndGetStoreInterface(b *testing.B, numServers int) (*KVStore, []*raft.RaftServer) {
 	b.Cleanup(cleanupDbFiles)
-	clusterConfig1 := generateClusterConfig(3)
-	clusterConfig2 := clusterConfig1
-	clusterConfig3 := clusterConfig1
+	clusterConfig := generateClusterConfig(numServers)
+	var clusterConfigs []common.ClusterConfig
+	for i := 0; i < numServers; i++ {
+		clusterConfigs = append(clusterConfigs, clusterConfig)
+	}
 
-	raftServers := makeRaftCluster(b, clusterConfig1, clusterConfig2, clusterConfig3)
+	raftServers := makeRaftCluster(b, clusterConfigs...)
 	verifyElectionSafetyAndLiveness(b, raftServers)
 	clientManager := rpc.NewManager()
 
-	store, err := NewKeyValStore(clusterConfig1.Cluster, clientManager)
+	store, err := NewKeyValStore(clusterConfig.Cluster, clientManager)
 	assert.NoError(b, err)
-	return store
+	return store, raftServers
 }
 
-func BenchmarkClient(b *testing.B) {
+func BenchmarkClient_ReadWriteThroughput(b *testing.B) {
 
-	store := spinUpClusterAndGetStoreInterface(b)
+	numServers := 3
+	// Write ThroughPut
+	store, _ := spinUpClusterAndGetStoreInterface(b, numServers)
 	numRequests := 100
 
 	start := time.Now()
@@ -111,5 +116,68 @@ func BenchmarkClient(b *testing.B) {
 
 	wg.Wait()
 	elapsed := time.Since(start)
-	fmt.Printf("[Benchmark] %d requests took %s\n", numRequests, elapsed)
+	writeTime := elapsed
+	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, numServers)
+
+	// Read ThroughPut
+
+	start = time.Now()
+	wg = sync.WaitGroup{}
+	for i := 0; i < numRequests; i++ {
+		wg.Add(1)
+		reqNumber := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("key%d", reqNumber)
+			store.Get(key)
+		}()
+	}
+
+	wg.Wait()
+	elapsed = time.Since(start)
+	readTime := elapsed
+	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, numServers)
+
+	assert.Less(b, math.Abs((readTime - writeTime).Seconds()), 1.0)
+
+}
+
+func BenchmarkServer_CatchUpTime(b *testing.B) {
+	numServers := 3
+	numLogsToCatchUp := 100
+
+	laggingServerIndex := 2
+
+	store, servers := spinUpClusterAndGetStoreInterface(b, numServers)
+
+	servers[laggingServerIndex].Disconnect()
+
+	var wg sync.WaitGroup
+	for i := 0; i < numLogsToCatchUp; i++ {
+		wg.Add(1)
+		reqNumber := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("key%d", reqNumber)
+			val := fmt.Sprintf("val%d", reqNumber)
+			store.Set(key, val)
+		}()
+	}
+
+	wg.Wait()
+
+	servers[laggingServerIndex].Reconnect()
+
+	start := time.Now()
+	// Assuming correctness
+	for {
+		logLength, err := servers[laggingServerIndex].LogStore.Length()
+		assert.NoError(b, err)
+		if int(logLength) == numLogsToCatchUp+1 {
+			break
+		}
+	}
+	elapsed := time.Since(start)
+
+	fmt.Printf("[Benchmark] lagging server took took %s to catch up %d entries on a %d server raft.\n", elapsed, numLogsToCatchUp, numServers)
 }
