@@ -31,6 +31,16 @@ func makeRaftCluster(t *testing.T, configs ...common.ClusterConfig) (servers []*
 	return
 }
 
+func makeRaftServer(t *testing.T, config common.ClusterConfig, i int) (server *RaftServer) {
+	logstore, err := persistent.CreateDbLogStore(fmt.Sprintf("logstore-%v.db", config.Cluster[i].ID))
+	assert.NoError(t, err)
+	pstore, err := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", config.Cluster[i].ID))
+	assert.NoError(t, err)
+	raftServer := NewRaftServer(config.Cluster[i], config, kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
+	assert.NotNil(t, raftServer)
+	return raftServer
+}
+
 func cleanupDbFiles() {
 	matches, err := filepath.Glob("*.db")
 	if err != nil {
@@ -102,7 +112,7 @@ func jsonHelpers(t *testing.T) (func(key, val string, transactionId uuid.UUID) [
 }
 
 // Sends concurrent requests
-func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, waitToFinish bool) {
+func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, waitToFinish bool, valSuffix string) {
 	setMarshaller, _ := jsonHelpers(t)
 	var wg sync.WaitGroup
 	for i := int64(0); i < numRequests; i++ {
@@ -112,7 +122,7 @@ func sendClientSetRequests(t *testing.T, server *RaftServer, numRequests int64, 
 		go func() {
 			defer wg.Done()
 			key := fmt.Sprintf("key%d", reqNumber)
-			val := fmt.Sprintf("val%d", reqNumber)
+			val := fmt.Sprintf("%s%d", valSuffix, reqNumber)
 
 			req := common.ClientRequestRPC{
 				Data: setMarshaller(key, val, uuid.New()),
@@ -230,6 +240,8 @@ func checkEqualLogs(t *testing.T, servers []*RaftServer) {
 }
 
 func Test_SimpleElection(t *testing.T) {
+	// Test to verify that a leader is elected when the raft is first started and for a given
+	// term there is only 1 leader
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
@@ -237,6 +249,7 @@ func Test_SimpleElection(t *testing.T) {
 }
 
 func Test_ElectionWithoutHeartbeat(t *testing.T) {
+	// Test to verify election safety when multiple leaders keep getting elected
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	clusterConfig.HeartBeatTimeout = 10 * time.Hour
@@ -245,6 +258,11 @@ func Test_ElectionWithoutHeartbeat(t *testing.T) {
 }
 
 func Test_ReElection(t *testing.T) {
+	// This test verifies that if a leader gets disconnected then a new leader will be appointed.
+	// The state of the disconnected leader will be Leader until it reconnects back into the cluster. The disconnected
+	// leader will then become a follower and will have its term updated as the new leader.
+	// Let's say server 1 becomes leader. We then disconnect server 1 and allows either server 2 or 3 to become leader.
+	// The state of server 1 stays as Leader until it reconnects back into cluster, and then it becomes follower
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
@@ -277,6 +295,7 @@ func Test_ReElection(t *testing.T) {
 }
 
 func Test_ReJoin(t *testing.T) {
+	// This test verifies that a disconnected server, eventually catches up to other server after reconnecting
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig1 := generateClusterConfig(3)
 	clusterConfig2 := clusterConfig1
@@ -303,9 +322,13 @@ func Test_ReJoin(t *testing.T) {
 	// now we reconnect 2
 	servers[2].Reconnect()
 	verifyElectionSafetyAndLiveness(t, servers)
+	time.Sleep(5 * time.Second)
+	assert.Equal(t, servers[0].Term, servers[2].Term, "Disconnected server has not caught up")
 }
 
 func TestGetAndSetClient(t *testing.T) {
+	// This test verifies that the client RPC is working correctly and the client requests are handled properly
+	// This also ensures that correct value is applied in the FSM and returned to client
 	setMarshaller, getMarshaller := jsonHelpers(t)
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
@@ -356,14 +379,37 @@ func TestGetAndSetClient(t *testing.T) {
 }
 
 func Test_SimpleLogStoreAndFSMCheck(t *testing.T) {
+	// This test verifies that all the logs and FSM of all raft servers are in sync if there is no failure
 	t.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
 	verifyElectionSafetyAndLiveness(t, servers)
-	sendClientSetRequests(t, servers[0], 10, true)
+	sendClientSetRequests(t, servers[0], 100, true, "val")
 	waitForLogsToMatch(t, servers, 3)
 	checkEqualLogs(t, servers)
-	checkEqualFSM(t, servers, 10)
+	time.Sleep(2 * time.Second)
+	checkEqualFSM(t, servers, 100)
+}
+
+func Test_OneVotePerServerPerTerm(t *testing.T) {
+	// This function tests that a any raft server will vote only once in a given term
+	t.Cleanup(cleanupDbFiles)
+	clusterConfig1 := generateClusterConfig(3)
+	clusterConfig2 := clusterConfig1
+	clusterConfig3 := clusterConfig1
+	// purposefully delay the election timeouts of 3 to ensure that 3 never becomes a leader
+	clusterConfig2.ElectionTimeout = 10 * time.Hour
+
+	servers := makeRaftCluster(t, clusterConfig1, clusterConfig2)
+	verifyElectionSafetyAndLiveness(t, servers)
+	assert.Equal(t, servers[0].State, Leader)
+	servers[0].Disconnect()
+	assert.Equal(t, servers[1].Term, int64(1))
+	servers = append(servers, makeRaftServer(t, clusterConfig3, 2))
+	assert.Equal(t, servers[2].Term, int64(0))
+	verifyElectionSafetyAndLiveness(t, servers[1:])
+	assert.Equal(t, servers[2].State, Leader)
+	assert.Equal(t, servers[2].Term, int64(2))
 }
 
 func Test_LogReplayability(t *testing.T) {
@@ -380,7 +426,7 @@ func Test_LogReplayability(t *testing.T) {
 	clusterConfig := generateClusterConfig(3)
 	servers := makeRaftCluster(t, clusterConfig, clusterConfig, clusterConfig)
 	verifyElectionSafetyAndLiveness(t, servers[1:])
-	sendClientSetRequests(t, servers[0], 10, true)
+	sendClientSetRequests(t, servers[0], 10, true, "val")
 	waitForLogsToMatch(t, servers, 10)
 	checkEqualLogs(t, servers)
 	time.Sleep(time.Second)
@@ -423,11 +469,11 @@ func Test_LaggingFollower(t *testing.T) {
 	assert.Equal(t, Leader, servers[0].State, "server[0] not elected as leader")
 	// server 0 elected as leader,
 	// Send some client requests
-	sendClientSetRequests(t, servers[0], 10, true)
+	sendClientSetRequests(t, servers[0], 10, true, "val")
 	//Disconnecting server 2
 	servers[2].Disconnect()
 	//Sending more client requests
-	sendClientSetRequests(t, servers[0], 100, true)
+	sendClientSetRequests(t, servers[0], 100, true, "val")
 	//Reconnect Server 2
 	servers[2].Reconnect()
 
@@ -551,7 +597,7 @@ func Test_CommitDurability(t *testing.T) {
 		assert.False(t, resp.Success)
 	}
 
-	sendClientSetRequests(t, servers[1], 10, true)
+	sendClientSetRequests(t, servers[1], 10, true, "val")
 	time.Sleep(time.Second)
 	checkEqualFSM(t, servers[:2], 10)
 
