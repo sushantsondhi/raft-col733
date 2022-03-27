@@ -85,20 +85,20 @@ func BenchmarkClientReadWriteThroughput(args []string) {
 	// Write ThroughPut
 	fmt.Printf("Running Performance Check: Client Read Write Throughput")
 	start := time.Now()
-	var wg sync.WaitGroup
+	//var wg sync.WaitGroup
 	for i := 0; i < numRequests; i++ {
-		wg.Add(1)
+		//wg.Add(1)
 		reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
 		// statements might have unexpected values
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			val := fmt.Sprintf("val%d", reqNumber)
-			store.Set(key, val)
-		}()
+		//go func() {
+		//	defer wg.Done()
+		key := fmt.Sprintf("key%d", reqNumber)
+		val := fmt.Sprintf("val%d", reqNumber)
+		store.Set(key, val)
+		//}()
 	}
 
-	wg.Wait()
+	//wg.Wait()
 	elapsed := time.Since(start)
 	writeTime := elapsed
 	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, len(cfg.Cluster))
@@ -106,18 +106,18 @@ func BenchmarkClientReadWriteThroughput(args []string) {
 	// Read ThroughPut
 
 	start = time.Now()
-	wg = sync.WaitGroup{}
+	//wg = sync.WaitGroup{}
 	for i := 0; i < numRequests; i++ {
-		wg.Add(1)
+		//wg.Add(1)
 		reqNumber := i
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			store.Get(key)
-		}()
+		//go func() {
+		//	defer wg.Done()
+		key := fmt.Sprintf("key%d", reqNumber)
+		store.Get(key)
+		//}()
 	}
 
-	wg.Wait()
+	//wg.Wait()
 	elapsed = time.Since(start)
 	readTime := elapsed
 	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, len(cfg.Cluster))

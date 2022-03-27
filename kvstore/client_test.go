@@ -8,7 +8,6 @@ import (
 	"github.com/sushantsondhi/raft-col733/persistent"
 	"github.com/sushantsondhi/raft-col733/raft"
 	"github.com/sushantsondhi/raft-col733/rpc"
-	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -101,44 +100,44 @@ func BenchmarkClient_ReadWriteThroughput(b *testing.B) {
 
 	start := time.Now()
 
-	var wg sync.WaitGroup
+	//var wg sync.WaitGroup
 	for i := 0; i < numRequests; i++ {
-		wg.Add(1)
+		//wg.Add(1)
 		reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
 		// statements might have unexpected values
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			val := fmt.Sprintf("val%d", reqNumber)
-			store.Set(key, val)
-		}()
+		//go func() {
+		//	defer wg.Done()
+		key := fmt.Sprintf("key%d", reqNumber)
+		val := fmt.Sprintf("val%d", reqNumber)
+		store.Set(key, val)
+		//}()
 	}
 
-	wg.Wait()
+	//wg.Wait()
 	elapsed := time.Since(start)
 	writeTime := elapsed
 	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, numServers)
 
 	// Read ThroughPut
 
-	start = time.Now()
-	wg = sync.WaitGroup{}
-	for i := 0; i < numRequests; i++ {
-		wg.Add(1)
-		reqNumber := i
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			store.Get(key)
-		}()
-	}
-
-	wg.Wait()
-	elapsed = time.Since(start)
-	readTime := elapsed
-	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, numServers)
-
-	assert.Less(b, math.Abs((readTime - writeTime).Seconds()), 1.0)
+	//start = time.Now()
+	//wg = sync.WaitGroup{}
+	//for i := 0; i < numRequests; i++ {
+	//	wg.Add(1)
+	//	reqNumber := i
+	//	go func() {
+	//		defer wg.Done()
+	//		key := fmt.Sprintf("key%d", reqNumber)
+	//		store.Get(key)
+	//	}()
+	//}
+	//
+	//wg.Wait()
+	//elapsed = time.Since(start)
+	//readTime := elapsed
+	//fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, numServers)
+	//
+	//assert.Less(b, math.Abs((readTime - writeTime).Seconds()), 1.0)
 
 }
 
