@@ -75,9 +75,12 @@ func verifyElectionSafetyAndLiveness(b *testing.B, servers []*raft.RaftServer) {
 	assert.Truef(b, liveness, "election liveness not satisfied (no leader elected ever)")
 }
 
-func spinUpClusterAndGetStoreInterface(b *testing.B, numServers int) (*KVStore, []*raft.RaftServer) {
+func spinUpClusterAndGetStoreInterface(b *testing.B, numServers int, electionsTimeoutMs ...int) (*KVStore, []*raft.RaftServer) {
 	b.Cleanup(cleanupDbFiles)
 	clusterConfig := generateClusterConfig(numServers)
+	if len(electionsTimeoutMs) != 0 {
+		clusterConfig.ElectionTimeout = time.Millisecond * time.Duration(electionsTimeoutMs[0])
+	}
 	var clusterConfigs []common.ClusterConfig
 	for i := 0; i < numServers; i++ {
 		clusterConfigs = append(clusterConfigs, clusterConfig)
@@ -180,4 +183,45 @@ func BenchmarkServer_CatchUpTime(b *testing.B) {
 	elapsed := time.Since(start)
 
 	fmt.Printf("[Benchmark] lagging server took took %s to catch up %d entries on a %d server raft.\n", elapsed, numLogsToCatchUp, numServers)
+}
+
+func BenchmarkServer_LeaderElection(b *testing.B) {
+
+	numServers := 11
+	electionTimeoutMs := 500
+	_, servers := spinUpClusterAndGetStoreInterface(b, numServers, electionTimeoutMs)
+
+	verifyElectionSafetyAndLiveness(b, servers)
+
+	getLeader := func(stoppedIndex int) int {
+		leaderIdx := -1
+		for i, server := range servers {
+			if i == stoppedIndex {
+				continue
+			}
+			server.Mutex.Lock()
+			if server.State == raft.Leader {
+				leaderIdx = i
+			}
+			server.Mutex.Unlock()
+		}
+		return leaderIdx
+	}
+
+	leaderIndex := getLeader(-1)
+	assert.NotEqual(b, -1, leaderIndex)
+	stoppedIndex := leaderIndex
+
+	servers[stoppedIndex].Stop()
+
+	start := time.Now()
+
+	for getLeader(stoppedIndex) == -1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	elapsed := time.Since(start)
+
+	fmt.Printf("[Benchmark] electing new leader  took %s on a %d server raft with election timeout = %d ms.\n", elapsed, numServers, electionTimeoutMs)
+
 }
