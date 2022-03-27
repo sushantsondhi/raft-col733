@@ -57,7 +57,7 @@ func BenchmarkClientReadWriteThroughput(args []string) {
 	flagset := flag.NewFlagSet("bench1", flag.ExitOnError)
 	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster details")
 	var numRequests int
-	flagset.IntVar(&numRequests, "numServers", 100, "Number of servers to spin")
+	flagset.IntVar(&numRequests, "numRequests", 100, "Number of client requests to send")
 	if err := flagset.Parse(args); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
@@ -84,20 +84,13 @@ func BenchmarkClientReadWriteThroughput(args []string) {
 	// Write ThroughPut
 	fmt.Printf("Running Performance Check: Client Read Write Throughput")
 	start := time.Now()
-	//var wg sync.WaitGroup
 	for i := 0; i < numRequests; i++ {
-		//wg.Add(1)
-		reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
-		// statements might have unexpected values
-		//go func() {
-		//	defer wg.Done()
+		reqNumber := i
 		key := fmt.Sprintf("key%d", reqNumber)
 		val := fmt.Sprintf("val%d", reqNumber)
 		store.Set(key, val)
-		//}()
 	}
 
-	//wg.Wait()
 	elapsed := time.Since(start)
 	writeTime := elapsed
 	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, len(cfg.Cluster))
@@ -105,18 +98,12 @@ func BenchmarkClientReadWriteThroughput(args []string) {
 	// Read ThroughPut
 
 	start = time.Now()
-	//wg = sync.WaitGroup{}
 	for i := 0; i < numRequests; i++ {
-		//wg.Add(1)
 		reqNumber := i
-		//go func() {
-		//	defer wg.Done()
 		key := fmt.Sprintf("key%d", reqNumber)
 		store.Get(key)
-		//}()
 	}
 
-	//wg.Wait()
 	elapsed = time.Since(start)
 	readTime := elapsed
 	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, len(cfg.Cluster))
@@ -126,8 +113,9 @@ func BenchmarkClientReadWriteThroughput(args []string) {
 func BenchmarkServerCatchUpTime(args []string) {
 	flagset := flag.NewFlagSet("bench2", flag.ExitOnError)
 	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster details")
-	var numRequests int
-	flagset.IntVar(&numRequests, "numServers", 100, "Number of servers to spin")
+	var numRequests, laggingServerIndex int
+	flagset.IntVar(&numRequests, "numRequests", 100, "Number of client requests to send")
+	flagset.IntVar(&laggingServerIndex, "laggingServerIndex", 2, "Server index which lags")
 	if err := flagset.Parse(args); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
@@ -153,21 +141,14 @@ func BenchmarkServerCatchUpTime(args []string) {
 
 	fmt.Printf("Running Performance Check: Server catch up time")
 	numLogsToCatchUp := numRequests
-	laggingServerIndex := 2
 
-	//var wg sync.WaitGroup
 	for i := 0; i < numLogsToCatchUp; i++ {
-		//wg.Add(1)
 		reqNumber := i
-		//go func() {
-		//	defer wg.Done()
 		key := fmt.Sprintf("key%d", reqNumber)
 		val := fmt.Sprintf("val%d", reqNumber)
 		store.Set(key, val)
-		//}()
 	}
 
-	//wg.Wait()
 	server2 := runServer(cfg, laggingServerIndex)
 	start := time.Now()
 	// Assuming correctness
