@@ -12,7 +12,6 @@ import (
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -156,19 +155,19 @@ func BenchmarkServerCatchUpTime(args []string) {
 	numLogsToCatchUp := numRequests
 	laggingServerIndex := 2
 
-	var wg sync.WaitGroup
+	//var wg sync.WaitGroup
 	for i := 0; i < numLogsToCatchUp; i++ {
-		wg.Add(1)
+		//wg.Add(1)
 		reqNumber := i
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			val := fmt.Sprintf("val%d", reqNumber)
-			store.Set(key, val)
-		}()
+		//go func() {
+		//	defer wg.Done()
+		key := fmt.Sprintf("key%d", reqNumber)
+		val := fmt.Sprintf("val%d", reqNumber)
+		store.Set(key, val)
+		//}()
 	}
 
-	wg.Wait()
+	//wg.Wait()
 	server2 := runServer(cfg, laggingServerIndex)
 	start := time.Now()
 	// Assuming correctness

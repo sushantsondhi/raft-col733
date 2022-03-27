@@ -143,7 +143,7 @@ func BenchmarkClient_ReadWriteThroughput(b *testing.B) {
 
 func BenchmarkServer_CatchUpTime(b *testing.B) {
 	numServers := 3
-	numLogsToCatchUp := 100
+	numLogsToCatchUp := 5
 
 	laggingServerIndex := 2
 
