@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/sushantsondhi/raft-col733/benchmarks"
 	"github.com/sushantsondhi/raft-col733/common"
 	"github.com/sushantsondhi/raft-col733/kvstore"
 	"github.com/sushantsondhi/raft-col733/kvstore/client"
@@ -154,6 +155,10 @@ func main() {
 		runServer(args[1:])
 	case "client":
 		runClient(args[1:])
+	case "bench1":
+		benchmarks.BenchmarkClientReadWriteThroughput(args[1:])
+	case "bench2":
+		benchmarks.BenchmarkServerCatchUpTime(args[1:])
 	default:
 		fmt.Printf("unknown sub-command: %s\n", args[0])
 		os.Exit(2)
