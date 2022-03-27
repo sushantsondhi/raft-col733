@@ -3,93 +3,87 @@ package benchmarks
 import (
 	"flag"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/sushantsondhi/raft-col733/common"
 	"github.com/sushantsondhi/raft-col733/kvstore"
 	"github.com/sushantsondhi/raft-col733/persistent"
 	"github.com/sushantsondhi/raft-col733/raft"
 	"github.com/sushantsondhi/raft-col733/rpc"
 	"go.uber.org/multierr"
+	"gopkg.in/yaml.v2"
+	"io/ioutil"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
 
-func cleanupDbFiles() {
-	matches, err := filepath.Glob("*.db")
-	if err != nil {
-		panic(err)
-	}
-	for _, match := range matches {
-		os.Remove(match)
-	}
+type config struct {
+	Cluster          []common.Server
+	HeartbeatTimeout int // In milliseconds
+	ElectionTimeout  int // In milliseconds
 }
 
-func makeRaftCluster(configs ...common.ClusterConfig) (servers []*raft.RaftServer) {
-	for i := range configs {
-		logstore, logErr := persistent.CreateDbLogStore(fmt.Sprintf("logstore-%v.db", configs[i].Cluster[i].ID))
-		pstore, pErr := persistent.NewPStore(fmt.Sprintf("pstore-%v.db", configs[i].Cluster[i].ID))
-		err := multierr.Combine(logErr, pErr)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(2)
-		}
-		raftServer := raft.NewRaftServer(configs[i].Cluster[i], configs[i], kvstore.NewKeyValFSM(), logstore, pstore, rpc.NewManager())
-		servers = append(servers, raftServer)
+func runServer(cfg config, index int) *raft.RaftServer {
+	if index < 0 || index >= len(cfg.Cluster) {
+		fmt.Printf("invalid index: %d (config file specified %d servers only)\n", index, len(cfg.Cluster))
 	}
-	return
-}
+	var clusterConfig common.ClusterConfig
+	clusterConfig.Cluster = cfg.Cluster
+	clusterConfig.ElectionTimeout = time.Millisecond * time.Duration(cfg.ElectionTimeout)
+	clusterConfig.HeartBeatTimeout = time.Millisecond * time.Duration(cfg.HeartbeatTimeout)
 
-func generateClusterConfig(n int) common.ClusterConfig {
-	var servers []common.Server
-	for i := 0; i < n; i++ {
-		servers = append(servers, common.Server{
-			ID:         uuid.New(),
-			NetAddress: common.ServerAddress(fmt.Sprintf("127.0.0.1:%d", 12345+i)),
-		})
-	}
-	return common.ClusterConfig{
-		Cluster:          servers,
-		HeartBeatTimeout: 50 * time.Millisecond,
-		ElectionTimeout:  200 * time.Millisecond,
-	}
-}
-
-func spinUpClusterAndGetStoreInterface(numServers int) (*kvstore.KVStore, []*raft.RaftServer) {
-	clusterConfig := generateClusterConfig(numServers)
-	var clusterConfigs []common.ClusterConfig
-	for i := 0; i < numServers; i++ {
-		clusterConfigs = append(clusterConfigs, clusterConfig)
-	}
-
-	raftServers := makeRaftCluster(clusterConfigs...)
-	time.Sleep(3*time.Second)
-	clientManager := rpc.NewManager()
-
-	store, err := kvstore.NewKeyValStore(clusterConfig.Cluster, clientManager)
+	logStore, logErr := persistent.CreateDbLogStore(fmt.Sprintf("%v_logstore.db", cfg.Cluster[index].ID))
+	pStore, pErr := persistent.NewPStore(fmt.Sprintf("%v_pstore.db", cfg.Cluster[index].ID))
+	err := multierr.Combine(logErr, pErr)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(2)
 	}
-	return store, raftServers
+	fsm := kvstore.NewKeyValFSM()
+	manager := rpc.NewManager()
+	server := raft.NewRaftServer(
+		cfg.Cluster[index],
+		clusterConfig,
+		fsm,
+		logStore,
+		pStore,
+		manager,
+	)
+	if server == nil {
+		os.Exit(2)
+	}
+	return server
 }
 
-
-func benchmarkClientReadWriteThroughput(args []string) {
+func BenchmarkClientReadWriteThroughput(args []string) {
 	flagset := flag.NewFlagSet("bench1", flag.ExitOnError)
-	var numServers int
-	flagset.IntVar(&numServers, "numServers", 3, "Number of servers to spin")
+	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster details")
+	var numRequests int
+	flagset.IntVar(&numRequests, "numServers", 100, "Number of servers to spin")
 	if err := flagset.Parse(args); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
 	}
-	store, _  := spinUpClusterAndGetStoreInterface(numServers)
-	defer cleanupDbFiles()
+
+	bytes, err := ioutil.ReadFile(*configFile)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+	var cfg config
+	if err := yaml.Unmarshal(bytes, &cfg); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+
+	manager := rpc.NewManager()
+	store, err := kvstore.NewKeyValStore(cfg.Cluster, manager)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+
 	// Write ThroughPut
 	fmt.Printf("Running Performance Check: Client Read Write Throughput")
-	numRequests := 100
-
 	start := time.Now()
 	var wg sync.WaitGroup
 	for i := 0; i < numRequests; i++ {
@@ -107,7 +101,7 @@ func benchmarkClientReadWriteThroughput(args []string) {
 	wg.Wait()
 	elapsed := time.Since(start)
 	writeTime := elapsed
-	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, numServers)
+	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, len(cfg.Cluster))
 
 	// Read ThroughPut
 
@@ -126,25 +120,41 @@ func benchmarkClientReadWriteThroughput(args []string) {
 	wg.Wait()
 	elapsed = time.Since(start)
 	readTime := elapsed
-	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, numServers)
+	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, len(cfg.Cluster))
 
 }
 
-func benchmarkServerCatchUpTime(args []string) {
+func BenchmarkServerCatchUpTime(args []string) {
 	flagset := flag.NewFlagSet("bench2", flag.ExitOnError)
-	var numServers int
-	flagset.IntVar(&numServers, "numServers", 3, "Number of servers to spin")
+	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster details")
+	var numRequests int
+	flagset.IntVar(&numRequests, "numServers", 100, "Number of servers to spin")
 	if err := flagset.Parse(args); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
 	}
-	store, servers  := spinUpClusterAndGetStoreInterface(numServers)
-	defer cleanupDbFiles()
-	fmt.Printf("Running Performance Check: Server catch up time")
-	numLogsToCatchUp := 100
-	laggingServerIndex := 2
 
-	servers[laggingServerIndex].Disconnect()
+	bytes, err := ioutil.ReadFile(*configFile)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+	var cfg config
+	if err := yaml.Unmarshal(bytes, &cfg); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+
+	manager := rpc.NewManager()
+	store, err := kvstore.NewKeyValStore(cfg.Cluster, manager)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+
+	fmt.Printf("Running Performance Check: Server catch up time")
+	numLogsToCatchUp := numRequests
+	laggingServerIndex := 2
 
 	var wg sync.WaitGroup
 	for i := 0; i < numLogsToCatchUp; i++ {
@@ -159,36 +169,19 @@ func benchmarkServerCatchUpTime(args []string) {
 	}
 
 	wg.Wait()
-
-	servers[laggingServerIndex].Reconnect()
-
+	server2 := runServer(cfg, laggingServerIndex)
 	start := time.Now()
 	// Assuming correctness
 	for {
-		logLength, _ := servers[laggingServerIndex].LogStore.Length()
+		logLength, _ := server2.LogStore.Length()
 		if int(logLength) == numLogsToCatchUp+1 {
 			break
 		}
 	}
 	elapsed := time.Since(start)
 
-	fmt.Printf("[Benchmark] lagging server took took %s to catch up %d entries on a %d server raft.\n", elapsed, numLogsToCatchUp, numServers)
+	fmt.Printf("[Benchmark] lagging server took took %s to catch up %d entries on a %d server raft.\n", elapsed, numLogsToCatchUp, len(cfg.Cluster))
 }
 
-func main() {
-	args := os.Args[1:]
-	if len(args) < 1 {
-		fmt.Printf("usage: %s config | server | client ...\n", os.Args[0])
-		os.Exit(2)
-	}
-	switch args[0] {
-	case "bench1":
-		benchmarkClientReadWriteThroughput(args[1:])
-	case "bench2":
-		benchmarkServerCatchUpTime(args[1:])
-	default:
-		fmt.Printf("unknown sub-command: %s\n", args[0])
-		os.Exit(2)
-	}
-}
+
 
