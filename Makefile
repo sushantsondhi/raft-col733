@@ -11,3 +11,7 @@ test:
 	go test ./raft -run CommitDurability -count 1
 	go test ./raft -run OldTermsNotCommitted -count 1
 	go test ./raft -run ElectionSafety -count 1
+
+clean:
+	rm -f *.db
+	rm -f */*.db

@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 )
@@ -104,39 +103,25 @@ func BenchmarkClient_ReadWriteThroughput(b *testing.B) {
 
 	start := time.Now()
 
-	var wg sync.WaitGroup
 	for i := 0; i < numRequests; i++ {
-		wg.Add(1)
-		reqNumber := i // Warning: Loop variables captured by 'func' literals in 'go'
-		// statements might have unexpected values
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			val := fmt.Sprintf("val%d", reqNumber)
-			store.Set(key, val)
-		}()
+		reqNumber := i
+		key := fmt.Sprintf("key%d", reqNumber)
+		val := fmt.Sprintf("val%d", reqNumber)
+		store.Set(key, val)
 	}
 
-	wg.Wait()
 	elapsed := time.Since(start)
 	writeTime := elapsed
 	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, numServers)
 
 	// Read ThroughPut
-
 	start = time.Now()
-	wg = sync.WaitGroup{}
 	for i := 0; i < numRequests; i++ {
-		wg.Add(1)
 		reqNumber := i
-		go func() {
-			defer wg.Done()
-			key := fmt.Sprintf("key%d", reqNumber)
-			store.Get(key)
-		}()
+		key := fmt.Sprintf("key%d", reqNumber)
+		store.Get(key)
 	}
 
-	wg.Wait()
 	elapsed = time.Since(start)
 	readTime := elapsed
 	fmt.Printf("[Benchmark] %d read requests took %s on %d servers.\n", numRequests, readTime, numServers)
@@ -147,27 +132,19 @@ func BenchmarkClient_ReadWriteThroughput(b *testing.B) {
 
 func BenchmarkServer_CatchUpTime(b *testing.B) {
 	numServers := 3
-	numLogsToCatchUp := 100
+	numLogsToCatchUp := 5
 
 	laggingServerIndex := 2
 
 	store, servers := spinUpClusterAndGetStoreInterface(b, numServers)
-
 	servers[laggingServerIndex].Disconnect()
 
-	var wg sync.WaitGroup
 	for i := 0; i < numLogsToCatchUp; i++ {
-		wg.Add(1)
 		reqNumber := i
-		go func() {
-			defer wg.Done()
 			key := fmt.Sprintf("key%d", reqNumber)
 			val := fmt.Sprintf("val%d", reqNumber)
 			store.Set(key, val)
-		}()
 	}
-
-	wg.Wait()
 
 	servers[laggingServerIndex].Reconnect()
 
