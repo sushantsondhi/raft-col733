@@ -29,7 +29,7 @@ type config struct {
 
 func runServer(args []string) {
 	flagset := flag.NewFlagSet("server", flag.ExitOnError)
-	configFile := flagset.String("config", "", "YAML file containing cluster & configuration details")
+	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster & configuration details")
 	index := flagset.Int("me", -1, "Index of this server in the config file")
 	if err := flagset.Parse(args); err != nil {
 		fmt.Println(err)
@@ -120,7 +120,7 @@ func generateConfig(args []string) {
 
 func runClient(args []string) {
 	flagset := flag.NewFlagSet("client", flag.ExitOnError)
-	configFile := flagset.String("config", "", "YAML file containing cluster details")
+	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster details")
 	if err := flagset.Parse(args); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
