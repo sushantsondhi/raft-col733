@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -163,5 +164,52 @@ func BenchmarkServerCatchUpTime(args []string) {
 	fmt.Printf("[Benchmark] lagging server took took %s to catch up %d entries on a %d server raft.\n", elapsed, numLogsToCatchUp, len(cfg.Cluster))
 }
 
+func BenchmarkParallelClientThroughput(args []string) {
+	flagset := flag.NewFlagSet("bench3", flag.ExitOnError)
+	configFile := flagset.String("config", "config.yaml", "YAML file containing cluster details")
+	var numRequests int
+	flagset.IntVar(&numRequests, "numRequests", 100, "Number of client requests to send")
+	if err := flagset.Parse(args); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
 
+	bytes, err := ioutil.ReadFile(*configFile)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+	var cfg config
+	if err := yaml.Unmarshal(bytes, &cfg); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
 
+	// Write ThroughPut
+	fmt.Printf("Running Performance Check: Client Read Write Throughput")
+	reqsPerThread := numRequests / 10
+	var wg sync.WaitGroup
+	start := time.Now()
+	for i := 0; i < 10; i++ {
+		index := i
+		wg.Add(1)
+		go func() {
+			manager := rpc.NewManager()
+			store, err := kvstore.NewKeyValStore(cfg.Cluster, manager)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(2)
+			}
+			for i := index * reqsPerThread; i < (index+1)*reqsPerThread; i++ {
+				key := fmt.Sprintf("key%d", i)
+				val := fmt.Sprintf("val%d", i)
+				store.Set(key, val)
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	writeTime := elapsed
+	fmt.Printf("[Benchmark] %d write requests took %s on %d servers.\n", numRequests, writeTime, len(cfg.Cluster))
+}

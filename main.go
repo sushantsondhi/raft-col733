@@ -159,6 +159,8 @@ func main() {
 		benchmarks.BenchmarkClientReadWriteThroughput(args[1:])
 	case "bench2":
 		benchmarks.BenchmarkServerCatchUpTime(args[1:])
+	case "bench3":
+		benchmarks.BenchmarkParallelClientThroughput(args[1:])
 	default:
 		fmt.Printf("unknown sub-command: %s\n", args[0])
 		os.Exit(2)
